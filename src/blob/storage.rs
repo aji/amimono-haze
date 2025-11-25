@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc};
+use std::path::PathBuf;
 
 use amimono::{
     config::{BindingType, ComponentConfig},
@@ -60,25 +60,25 @@ impl StorageInstance {
 struct StorageComponent;
 
 impl Component for StorageComponent {
-    type Instance = Arc<StorageInstance>;
+    type Instance = StorageInstance;
 }
 
 fn blob_storage_entry() -> BoxFuture<'static, ()> {
     Box::pin(async {
-        let instance = Arc::new(StorageInstance::new().await);
+        let instance = StorageInstance::new().await;
         runtime::set_instance::<StorageComponent>(instance);
     })
 }
 
 pub fn instance() -> &'static StorageInstance {
-    runtime::get_instance::<StorageComponent>().as_ref()
+    runtime::get_instance::<StorageComponent>()
 }
 
 pub fn component(prefix: &str) -> ComponentConfig {
     ComponentConfig {
         label: format!("{}blob-storage", prefix),
         id: StorageComponent::id(),
-        binding: BindingType::Http,
+        binding: BindingType::None,
         is_stateful: true,
         entry: blob_storage_entry,
     }

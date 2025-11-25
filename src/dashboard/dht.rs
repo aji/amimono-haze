@@ -1,25 +1,17 @@
-use axum::{Router, routing::get};
+use crate::dashboard::tree::{BoxDirectory, DirEntry, Directory, Item, TreeError, TreeResult};
 
-use crate::{
-    dashboard::html::{Dir, DirEntry},
-    dht::controller::DhtClient,
-};
+pub struct DhtDirectory;
 
-pub fn router() -> Router<()> {
-    let dht = DhtClient::new();
+impl Directory for DhtDirectory {
+    async fn list(&self) -> TreeResult<Vec<DirEntry>> {
+        Err(TreeError::Other(format!("not implemented")))
+    }
 
-    Router::new().route(
-        "/",
-        get({
-            let dht = dht.clone();
-            async move || {
-                let items = match dht.list_scopes().await {
-                    Ok(scopes) => Ok(scopes.into_iter().map(|s| DirEntry(s, None)).collect()),
-                    Err(e) => Err(format!("Failed to fetch scopes: {e:?}")),
-                };
-                let dir = Dir("/dht".to_string(), Some("Known DHT scopes"), items);
-                dir.render()
-            }
-        }),
-    )
+    async fn open_dir(&self, _name: &str) -> TreeResult<Box<dyn BoxDirectory>> {
+        Err(TreeError::Other(format!("not implemented")))
+    }
+
+    async fn open_item(&self, _name: &str) -> TreeResult<Item> {
+        Err(TreeError::Other(format!("not implemented")))
+    }
 }

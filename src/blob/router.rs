@@ -18,7 +18,7 @@ mod ops {
     }
 }
 
-struct BlobService {
+pub struct BlobService {
     client: ops::Client<BlobService>,
 }
 
@@ -85,6 +85,8 @@ impl ops::Handler for BlobService {
             .map_err(|e| RpcError::Misc(e))
     }
 }
+
+pub type BlobClient = ops::Client<BlobService>;
 
 pub fn component(prefix: &str) -> ComponentConfig {
     ops::component::<BlobService>(format!("{}blob-router", prefix))

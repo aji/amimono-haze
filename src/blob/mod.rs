@@ -3,6 +3,8 @@ use amimono::config::{AppBuilder, JobBuilder};
 pub(crate) mod router;
 pub(crate) mod storage;
 
+pub use router::BlobClient;
+
 pub fn install(app: &mut AppBuilder, prefix: &str) {
     app.add_job(
         JobBuilder::new()

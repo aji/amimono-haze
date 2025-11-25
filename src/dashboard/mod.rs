@@ -4,48 +4,59 @@ use amimono::{
     config::{AppBuilder, Binding, BindingType, ComponentConfig, JobBuilder},
     runtime::{self, Component},
 };
-use axum::{Router, routing::get};
+use axum::{Router, extract::Path, routing::get};
 use futures::future::BoxFuture;
 
-use crate::dashboard::html::{Dir, DirEntry};
+use crate::dashboard::tree::{BoxDirectory, DirEntry, Directory, Item, TreeError, TreeResult};
 
-pub mod html;
+pub mod tree;
 
 #[cfg(feature = "dht")]
 mod dht;
-#[cfg(feature = "dht")]
-const DHT_ROUTER: fn() -> Router<()> = dht::router;
-#[cfg(not(feature = "dht"))]
-const DHT_ROUTER: fn() -> Router<()> = service_disabled;
-
 #[cfg(feature = "metadata")]
 mod metadata;
-#[cfg(feature = "metadata")]
-const METADATA_ROUTER: fn() -> Router<()> = metadata::router;
-#[cfg(not(feature = "metadata"))]
-const METADATA_ROUTER: fn() -> Router<()> = service_disabled;
+
+struct DashboardDirectory;
+
+impl Directory for DashboardDirectory {
+    async fn list(&self) -> TreeResult<Vec<DirEntry>> {
+        let mut entries = Vec::new();
+
+        if cfg!(feature = "dht") {
+            entries.push(DirEntry::dir("dht"));
+        }
+        if cfg!(feature = "metadata") {
+            entries.push(DirEntry::dir("metadata"));
+        }
+
+        Ok(entries)
+    }
+
+    async fn open_dir(&self, name: &str) -> TreeResult<Box<dyn BoxDirectory>> {
+        match name {
+            #[cfg(feature = "dht")]
+            "dht" => Ok(dht::DhtDirectory.boxed()),
+            #[cfg(feature = "metadata")]
+            "metadata" => Ok(metadata::MetadataDirectory.boxed()),
+            _ => Err(TreeError::NotFound),
+        }
+    }
+
+    async fn open_item(&self, _name: &str) -> TreeResult<Item> {
+        Err(TreeError::NotFound)
+    }
+}
 
 fn app_router() -> Router<()> {
     Router::new()
         .route(
             "/",
-            get(|| async {
-                let ents = {
-                    let mut ents = Vec::new();
-                    if cfg!(feature = "dht") {
-                        ents.push(DirEntry("dht".to_owned(), None));
-                    }
-                    if cfg!(feature = "metadata") {
-                        ents.push(DirEntry("metadata".to_owned(), None));
-                    }
-                    ents
-                };
-                let dir = Dir("/".to_string(), Some("Installed services"), Ok(ents));
-                dir.render()
-            }),
+            get(async || tree::render(DashboardDirectory, "").await),
         )
-        .nest("/dht", DHT_ROUTER())
-        .nest("/metadata", METADATA_ROUTER())
+        .route(
+            "/{*path}",
+            get(async |Path(path): Path<String>| tree::render(DashboardDirectory, &path).await),
+        )
 }
 
 #[allow(dead_code)]
