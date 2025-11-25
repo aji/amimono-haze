@@ -9,9 +9,9 @@ mod ops {
     amimono::rpc_ops! {
         fn delete(scope: String, key: String) -> bool;
         fn get(scope: String, key: String) -> Option<String>;
-        fn put(scope: String, key: String, value: String) -> bool;
         fn list(scope: String, key_prefix: String) -> Vec<(String, String)>;
         fn list_scopes() -> Vec<String>;
+        fn put(scope: String, key: String, value: String) -> bool;
     }
 }
 
@@ -30,12 +30,6 @@ impl ops::Handler for MetadataService {
         storage::instance().get(scope, key).map_err(lmdb_to_rpc)
     }
 
-    async fn put(&self, scope: String, key: String, value: String) -> RpcResult<bool> {
-        storage::instance()
-            .put(scope, key, value)
-            .map_err(lmdb_to_rpc)
-    }
-
     async fn list(&self, scope: String, key_prefix: String) -> RpcResult<Vec<(String, String)>> {
         storage::instance()
             .list(scope, key_prefix)
@@ -44,6 +38,12 @@ impl ops::Handler for MetadataService {
 
     async fn list_scopes(&self) -> RpcResult<Vec<String>> {
         storage::instance().list_scopes().map_err(lmdb_to_rpc)
+    }
+
+    async fn put(&self, scope: String, key: String, value: String) -> RpcResult<bool> {
+        storage::instance()
+            .put(scope, key, value)
+            .map_err(lmdb_to_rpc)
     }
 }
 

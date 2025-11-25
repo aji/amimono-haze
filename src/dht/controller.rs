@@ -10,7 +10,7 @@ mod ops {
     amimono::rpc_ops! {
         fn put(scope: String, key: String, value: Vec<u8>) -> bool;
         fn get(scope: String, key: String) -> Option<Vec<u8>>;
-        fn list(scope: String, key_prefix: String) -> Vec<(String, String)>;
+        fn list(scope: String, key_prefix: String) -> Vec<String>;
         fn list_scopes() -> Vec<String>;
     }
 }
@@ -25,13 +25,6 @@ impl ops::Handler for DhtService {
         let label = runtime::label::<RpcComponent<ops::Instance<Self>>>().to_owned();
         let md = MetadataClient::new();
 
-        if let Err(e) = md
-            .put(label.clone(), "config".to_string(), "default".to_string())
-            .await
-        {
-            panic!("failed to initialize dht metadata: {e:?}");
-        }
-
         DhtService { label, md }
     }
 
@@ -40,6 +33,13 @@ impl ops::Handler for DhtService {
             Ok(s) => s.to_owned(),
             Err(e) => return Err(RpcError::Misc(e.to_string())),
         };
+        self.md
+            .put(
+                self.label.clone(),
+                format!("scopes/{}", scope),
+                "".to_string(),
+            )
+            .await?;
         self.md
             .put(self.label.clone(), format!("data/{}/{}", scope, key), data)
             .await?;
@@ -55,12 +55,28 @@ impl ops::Handler for DhtService {
         Ok(res)
     }
 
-    async fn list(&self, _scope: String, _key_prefix: String) -> RpcResult<Vec<(String, String)>> {
-        Err(RpcError::Misc("Not implemented".to_string()))
+    async fn list(&self, scope: String, key_prefix: String) -> RpcResult<Vec<String>> {
+        let prefix = format!("data/{scope}/");
+        let res = self
+            .md
+            .list(self.label.clone(), format!("{}{}", prefix, key_prefix))
+            .await?
+            .into_iter()
+            .flat_map(|(k, _)| Some(k.strip_prefix(&prefix)?.to_owned()))
+            .collect();
+        Ok(res)
     }
 
     async fn list_scopes(&self) -> RpcResult<Vec<String>> {
-        Err(RpcError::Misc("Not implemented".to_string()))
+        let res = self
+            .md
+            .list(self.label.clone(), "scopes/".to_owned())
+            .await?
+            .iter()
+            .flat_map(|(s, _)| s.strip_prefix("scopes/"))
+            .map(|x| x.to_owned())
+            .collect();
+        Ok(res)
     }
 }
 

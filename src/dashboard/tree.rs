@@ -139,13 +139,10 @@ type TreeResponse = (StatusCode, Html<String>);
 pub(crate) async fn render<D: Directory>(dir: D, path: &str) -> TreeResponse {
     let mut cur = dir.boxed();
 
-    let title = path
-        .strip_suffix(".html")
-        .or(path.strip_suffix("/"))
-        .filter(|x| x.is_empty())
-        .unwrap_or(path);
+    let title = path.strip_suffix(".html").unwrap_or(path);
 
-    for elem in path.split("/") {
+    log::debug!("tree render: {path:?}");
+    for elem in path.split("/").skip(1) {
         let elem = decode_name(elem);
 
         if elem == "" {
@@ -165,8 +162,11 @@ pub(crate) async fn render<D: Directory>(dir: D, path: &str) -> TreeResponse {
 }
 
 async fn render_list(cur: BoxDirectory, title: &str) -> TreeResponse {
+    let is_root = title.is_empty();
+
     let (status, contents) = match cur.0.list().await {
-        Ok(items) => {
+        Ok(mut items) => {
+            items.sort_by(|a, b| a.name.cmp(&b.name));
             let contents = items
                 .into_iter()
                 .map(|it| {
@@ -191,18 +191,24 @@ async fn render_list(cur: BoxDirectory, title: &str) -> TreeResponse {
         }
     };
 
+    let go_up = if !is_root {
+        format!(r#"<li><a href="../">../</a></li>"#)
+    } else {
+        "".to_owned()
+    };
+
     let page = format!(
         r#"<!DOCTYPE html>
         <html>
         <head>
             <meta charset="UTF-8">
-            <title>Haze: /{title}</title>
+            <title>Haze: {title}</title>
             {CSS}
         </head>
         <body>
-            <h1>/{title}</h1>
+            <h1>{title}</h1>
             <ul class="dir">
-            <li><a href="../">..</a></li>
+            {go_up}
             {contents}
             </ul>
         </body>
@@ -236,15 +242,14 @@ async fn render_item(cur: BoxDirectory, title: &str, name: &str) -> TreeResponse
         <html>
         <head>
             <meta charset="UTF-8">
-            <title>Haze: /{title}</title>
+            <title>Haze: {title}</title>
             {CSS}
         </head>
         <body>
-            <h1>/{title}</h1>
+            <h1>{title}</h1>
             <ul class="dir">
             <li><a href="./">Back</a></li>
             </ul>
-            <hr />
             <p class="item">{contents}</p>
         </body>
         </html>"#
@@ -271,5 +276,6 @@ const CSS: &'static str = r#"
     li { margin: 0.5em 0; }
     a { text-decoration: none; color: #0066cc; }
     a:hover { text-decoration: underline; }
-    p.item { font-family: monospace; white-space: pre-wrap; }
+    p.item { font-family: monospace; white-space: pre-wrap;
+        padding: 2em; background-color: #f3f3f3; }
 </style>"#;

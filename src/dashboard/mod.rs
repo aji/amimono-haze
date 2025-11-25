@@ -8,7 +8,7 @@ use amimono::{
     config::{AppBuilder, Binding, BindingType, ComponentConfig, JobBuilder},
     runtime::{self, Component},
 };
-use axum::{Router, extract::Path, routing::get};
+use axum::{Router, http::Uri, response::IntoResponse, routing::get};
 use futures::future::BoxFuture;
 
 use crate::dashboard::tree::{BoxDirectory, DirEntry, Directory, Item, TreeError, TreeResult};
@@ -95,21 +95,14 @@ pub fn add_directory<D: Directory>(name: &'static str, dir: D) {
     }
 }
 
-fn app_router() -> Router<()> {
-    Router::new()
-        .route(
-            "/",
-            get(async || tree::render(DashboardDirectory, "").await),
-        )
-        .route(
-            "/{*path}",
-            get(async |Path(path): Path<String>| tree::render(DashboardDirectory, &path).await),
-        )
+async fn render_tree(uri: Uri) -> impl IntoResponse {
+    tree::render(DashboardDirectory, uri.path()).await
 }
 
-#[allow(dead_code)]
-fn service_disabled() -> Router<()> {
-    Router::new().route("/", get(async || "service not installed"))
+fn app_router() -> Router<()> {
+    Router::new()
+        .route("/", get(render_tree))
+        .route("/{*path}", get(render_tree))
 }
 
 async fn dashboard_entry_impl() {
