@@ -1,4 +1,4 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
 
 use amimono::rpc::RpcError;
 use axum::{http::StatusCode, response::Html};
@@ -22,17 +22,22 @@ pub trait Directory: Send + Sync + Sized + 'static {
 
     fn open_item(&self, name: &str) -> impl Future<Output = TreeResult<Item>> + Send;
 
-    fn open_dir(
-        &self,
-        name: &str,
-    ) -> impl Future<Output = TreeResult<Box<dyn BoxDirectory>>> + Send;
+    fn open_dir(&self, name: &str) -> impl Future<Output = TreeResult<BoxDirectory>> + Send;
 
-    fn boxed(self) -> Box<dyn BoxDirectory> {
-        Box::new(DirectoryProxy(self))
+    fn boxed(self) -> BoxDirectory {
+        BoxDirectory(Arc::new(DirectoryProxy(self)))
     }
 }
 
-pub trait BoxDirectory: Send + Sync + 'static {
+pub struct BoxDirectory(Arc<dyn BoxDirectoryTrait>);
+
+impl Clone for BoxDirectory {
+    fn clone(&self) -> Self {
+        BoxDirectory(self.0.clone())
+    }
+}
+
+trait BoxDirectoryTrait: Send + Sync + 'static {
     fn list(&'_ self) -> BoxFuture<'_, TreeResult<Vec<DirEntry>>>;
 
     fn open_item<'d, 'n, 'f>(&'d self, name: &'n str) -> BoxFuture<'f, TreeResult<Item>>
@@ -40,10 +45,7 @@ pub trait BoxDirectory: Send + Sync + 'static {
         'd: 'f,
         'n: 'f;
 
-    fn open_dir<'d, 'n, 'f>(
-        &'d self,
-        name: &'n str,
-    ) -> BoxFuture<'f, TreeResult<Box<dyn BoxDirectory>>>
+    fn open_dir<'d, 'n, 'f>(&'d self, name: &'n str) -> BoxFuture<'f, TreeResult<BoxDirectory>>
     where
         'd: 'f,
         'n: 'f;
@@ -51,7 +53,7 @@ pub trait BoxDirectory: Send + Sync + 'static {
 
 struct DirectoryProxy<D: Directory>(D);
 
-impl<D: Directory> BoxDirectory for DirectoryProxy<D> {
+impl<D: Directory> BoxDirectoryTrait for DirectoryProxy<D> {
     fn list(&'_ self) -> BoxFuture<'_, TreeResult<Vec<DirEntry>>> {
         Box::pin(self.0.list())
     }
@@ -64,10 +66,7 @@ impl<D: Directory> BoxDirectory for DirectoryProxy<D> {
         Box::pin(self.0.open_item(name))
     }
 
-    fn open_dir<'d, 'n, 'f>(
-        &'d self,
-        name: &'n str,
-    ) -> BoxFuture<'f, TreeResult<Box<dyn BoxDirectory>>>
+    fn open_dir<'d, 'n, 'f>(&'d self, name: &'n str) -> BoxFuture<'f, TreeResult<BoxDirectory>>
     where
         'd: 'f,
         'n: 'f,
@@ -101,6 +100,20 @@ pub struct Item {
     pub value: String,
 }
 
+impl Item {
+    pub fn new<S: Into<String>>(value: S) -> Item {
+        Item {
+            value: value.into(),
+        }
+    }
+}
+
+impl From<String> for Item {
+    fn from(value: String) -> Self {
+        Self::new(value)
+    }
+}
+
 fn encode_name(s: &'_ str) -> Cow<'_, str> {
     if s.is_empty() {
         Cow::Borrowed("%00")
@@ -123,7 +136,7 @@ fn decode_name(s: &'_ str) -> Cow<'_, str> {
 
 type TreeResponse = (StatusCode, Html<String>);
 
-pub async fn render<D: Directory>(dir: D, path: &str) -> TreeResponse {
+pub(crate) async fn render<D: Directory>(dir: D, path: &str) -> TreeResponse {
     let mut cur = dir.boxed();
 
     let title = path
@@ -140,7 +153,7 @@ pub async fn render<D: Directory>(dir: D, path: &str) -> TreeResponse {
         } else if let Some(name) = elem.strip_suffix(".html") {
             return render_item(cur, title, name).await;
         } else {
-            cur = match cur.open_dir(elem.as_ref()).await {
+            cur = match cur.0.open_dir(elem.as_ref()).await {
                 Ok(next) => next,
                 Err(TreeError::NotFound) => return render_404(),
                 Err(TreeError::Other(s)) => return render_500(&s),
@@ -151,8 +164,8 @@ pub async fn render<D: Directory>(dir: D, path: &str) -> TreeResponse {
     render_404()
 }
 
-async fn render_list(cur: Box<dyn BoxDirectory>, title: &str) -> TreeResponse {
-    let (status, contents) = match cur.list().await {
+async fn render_list(cur: BoxDirectory, title: &str) -> TreeResponse {
+    let (status, contents) = match cur.0.list().await {
         Ok(items) => {
             let contents = items
                 .into_iter()
@@ -199,8 +212,8 @@ async fn render_list(cur: Box<dyn BoxDirectory>, title: &str) -> TreeResponse {
     (status, Html(page))
 }
 
-async fn render_item(cur: Box<dyn BoxDirectory>, title: &str, name: &str) -> TreeResponse {
-    let (status, contents) = match cur.open_item(name).await {
+async fn render_item(cur: BoxDirectory, title: &str, name: &str) -> TreeResponse {
+    let (status, contents) = match cur.0.open_item(name).await {
         Ok(item) => {
             let clean = item
                 .value

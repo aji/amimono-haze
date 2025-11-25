@@ -7,7 +7,7 @@ impl Directory for DhtDirectory {
         Err(TreeError::Other(format!("not implemented")))
     }
 
-    async fn open_dir(&self, _name: &str) -> TreeResult<Box<dyn BoxDirectory>> {
+    async fn open_dir(&self, _name: &str) -> TreeResult<BoxDirectory> {
         Err(TreeError::Other(format!("not implemented")))
     }
 

@@ -21,7 +21,7 @@ impl Directory for MetadataDirectory {
         Err(TreeError::NotFound)
     }
 
-    async fn open_dir(&self, name: &str) -> TreeResult<Box<dyn BoxDirectory>> {
+    async fn open_dir(&self, name: &str) -> TreeResult<BoxDirectory> {
         Ok(MetadataScopeDirectory(name.to_owned()).boxed())
     }
 }
@@ -48,7 +48,7 @@ impl Directory for MetadataScopeDirectory {
             .map(|it| Item { value: it })
     }
 
-    async fn open_dir(&self, _name: &str) -> TreeResult<Box<dyn BoxDirectory>> {
+    async fn open_dir(&self, _name: &str) -> TreeResult<BoxDirectory> {
         Err(TreeError::NotFound)
     }
 }

@@ -1,4 +1,8 @@
-use std::net::SocketAddr;
+use std::{
+    collections::HashMap,
+    net::SocketAddr,
+    sync::{LazyLock, RwLock},
+};
 
 use amimono::{
     config::{AppBuilder, Binding, BindingType, ComponentConfig, JobBuilder},
@@ -16,9 +20,9 @@ mod dht;
 #[cfg(feature = "metadata")]
 mod metadata;
 
-struct DashboardDirectory;
+struct DashboardSysDirectory;
 
-impl Directory for DashboardDirectory {
+impl Directory for DashboardSysDirectory {
     async fn list(&self) -> TreeResult<Vec<DirEntry>> {
         let mut entries = Vec::new();
 
@@ -32,7 +36,7 @@ impl Directory for DashboardDirectory {
         Ok(entries)
     }
 
-    async fn open_dir(&self, name: &str) -> TreeResult<Box<dyn BoxDirectory>> {
+    async fn open_dir(&self, name: &str) -> TreeResult<BoxDirectory> {
         match name {
             #[cfg(feature = "dht")]
             "dht" => Ok(dht::DhtDirectory.boxed()),
@@ -44,6 +48,50 @@ impl Directory for DashboardDirectory {
 
     async fn open_item(&self, _name: &str) -> TreeResult<Item> {
         Err(TreeError::NotFound)
+    }
+}
+
+struct DashboardDirectory;
+
+impl Directory for DashboardDirectory {
+    async fn list(&self) -> TreeResult<Vec<DirEntry>> {
+        let res = DIRECTORIES
+            .read()
+            .unwrap()
+            .keys()
+            .copied()
+            .map(DirEntry::dir)
+            .collect();
+        Ok(res)
+    }
+    async fn open_item(&self, _name: &str) -> TreeResult<Item> {
+        Err(TreeError::NotFound)
+    }
+    async fn open_dir(&self, name: &str) -> TreeResult<BoxDirectory> {
+        match DIRECTORIES.read().unwrap().get(name) {
+            Some(x) => Ok(x.clone()),
+            None => Err(TreeError::NotFound),
+        }
+    }
+}
+
+static DIRECTORIES: LazyLock<RwLock<HashMap<&'static str, BoxDirectory>>> = LazyLock::new(|| {
+    let mut dirs = HashMap::new();
+    dirs.insert("haze", DashboardSysDirectory.boxed());
+    RwLock::new(dirs)
+});
+
+pub fn add_directory<D: Directory>(name: &'static str, dir: D) {
+    let is_new = DIRECTORIES
+        .write()
+        .unwrap()
+        .insert(name, dir.boxed())
+        .is_none();
+    if !is_new {
+        panic!(
+            "cannot use {} as dashboard directory name: already used",
+            name
+        );
     }
 }
 
@@ -99,6 +147,6 @@ fn component(prefix: &str) -> ComponentConfig {
     }
 }
 
-pub fn install(app: &mut AppBuilder, prefix: &str) {
+pub(crate) fn install(app: &mut AppBuilder, prefix: &str) {
     app.add_job(JobBuilder::new().add_component(component(prefix)));
 }

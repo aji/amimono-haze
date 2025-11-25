@@ -5,7 +5,7 @@ pub(crate) mod storage;
 
 pub use router::MetadataClient;
 
-pub fn install(app: &mut AppBuilder, prefix: &str) {
+pub(crate) fn install(app: &mut AppBuilder, prefix: &str) {
     app.add_job(
         JobBuilder::new()
             .with_label(format!("{}metadata", prefix))
