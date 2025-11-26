@@ -10,6 +10,8 @@ pub mod dht;
 #[cfg(feature = "metadata")]
 pub mod metadata;
 
+pub(crate) mod util;
+
 pub fn installer() -> impl FnOnce(&mut AppBuilder) {
     installer_with_prefix("haze")
 }

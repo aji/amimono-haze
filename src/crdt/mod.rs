@@ -49,26 +49,6 @@ pub trait StoredCrdt: Crdt + Serialize + DeserializeOwned + 'static {
     }
 }
 
-static SCOPES: LazyLock<RwLock<HashMap<String, TypeId>>> =
-    LazyLock::new(|| RwLock::new(HashMap::new()));
-
-fn bind_scope<T: StoredCrdt>(scope: &str) {
-    SCOPES
-        .write()
-        .expect("failed to get SCOPES lock")
-        .insert(scope.to_owned(), TypeId::of::<T>());
-}
-
-pub(crate) fn check_scope<T: StoredCrdt>(scope: &str) -> bool {
-    let ty = SCOPES
-        .read()
-        .expect("failed to get SCOPES lock")
-        .get(scope)
-        .copied()
-        .expect("scope not found");
-    ty == TypeId::of::<T>()
-}
-
 impl Crdt for () {
     fn merge_from(&mut self, _other: Self) {}
     fn merge(self, _other: Self) {}
@@ -173,4 +153,24 @@ pub(crate) fn install(app: &mut AppBuilder, prefix: &str) {
             .with_label(format!("{prefix}-crdt"))
             .add_component(storage::component(prefix)),
     );
+}
+
+static SCOPES: LazyLock<RwLock<HashMap<String, TypeId>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+fn bind_scope<T: StoredCrdt>(scope: &str) {
+    SCOPES
+        .write()
+        .expect("failed to get SCOPES lock")
+        .insert(scope.to_owned(), TypeId::of::<T>());
+}
+
+pub(crate) fn check_scope<T: StoredCrdt>(scope: &str) -> bool {
+    let ty = SCOPES
+        .read()
+        .expect("failed to get SCOPES lock")
+        .get(scope)
+        .copied()
+        .expect("scope not found");
+    ty == TypeId::of::<T>()
 }

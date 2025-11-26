@@ -32,7 +32,7 @@ to send their replicas to each other for editing.
 A simple example of a CRDT is sets under union, which in Rust we can implement
 in terms of `HashSet`:
 
-```rust
+```rust,ignore
 impl<T: Eq + Hash> Crdt for HashSet<T> {
     fn merge_from(&mut self, other: Self) {
         for item in other.into_iter() {
