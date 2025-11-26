@@ -83,6 +83,6 @@ impl ops::Handler for DhtService {
 pub type DhtClient = ops::Client<DhtService>;
 
 pub fn install(app: &mut AppBuilder, prefix: &str) {
-    let label = format!("{}dht", prefix);
+    let label = format!("{prefix}-dht");
     app.add_job(JobBuilder::new().add_component(ops::component::<DhtService>(label)));
 }

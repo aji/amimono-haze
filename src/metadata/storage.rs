@@ -131,7 +131,7 @@ pub fn instance() -> &'static StorageInstance {
 
 pub fn component(prefix: &str) -> ComponentConfig {
     ComponentConfig {
-        label: format!("{}md-storage", prefix),
+        label: format!("{prefix}-md-storage"),
         id: StorageComponent::id(),
         binding: BindingType::None,
         is_stateful: true,

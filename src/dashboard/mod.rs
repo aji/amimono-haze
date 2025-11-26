@@ -132,7 +132,7 @@ impl Component for DashboardComponent {
 
 fn component(prefix: &str) -> ComponentConfig {
     ComponentConfig {
-        label: format!("{}dashboard", prefix),
+        label: format!("{prefix}-dashboard"),
         id: DashboardComponent::id(),
         binding: BindingType::HttpFixed(8585),
         is_stateful: false,

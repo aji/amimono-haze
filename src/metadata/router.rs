@@ -54,5 +54,5 @@ fn lmdb_to_rpc(e: lmdb::Error) -> RpcError {
 pub type MetadataClient = ops::Client<MetadataService>;
 
 pub fn component(prefix: &str) -> ComponentConfig {
-    ops::component::<MetadataService>(format!("{}md-router", prefix))
+    ops::component::<MetadataService>(format!("{prefix}-md-router"))
 }

@@ -8,7 +8,7 @@ pub use router::BlobClient;
 pub fn install(app: &mut AppBuilder, prefix: &str) {
     app.add_job(
         JobBuilder::new()
-            .with_label(format!("{}blob", prefix))
+            .with_label(format!("{prefix}-blob"))
             .add_component(router::component(prefix))
             .add_component(storage::component(prefix)),
     );

@@ -89,5 +89,5 @@ impl ops::Handler for BlobService {
 pub type BlobClient = ops::Client<BlobService>;
 
 pub fn component(prefix: &str) -> ComponentConfig {
-    ops::component::<BlobService>(format!("{}blob-router", prefix))
+    ops::component::<BlobService>(format!("{prefix}-blob-router"))
 }
