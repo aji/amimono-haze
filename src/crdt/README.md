@@ -64,6 +64,17 @@ key space is assigned to 2 replicas, one primary and one secondary. Reads and
 writes always go to the primary replica, and values are copied to the secondary
 replica.
 
-## Note on single-replica systems
+## Storage
 
-A single-replica system functions as a simple database.
+Values are durably stored in LMDB with the following schema:
+
+* `members` &mdash; A set of network identifiers for hash ring members,
+  including the current node. When this is different from the actual membership,
+  repartitioning is needed.
+
+* `values` &mdash; A map from scope:key pairs to serialized CRDTs.
+
+## Controller
+
+The controller is a stateless component that monitors the set of members and
+automatically coordinates repartitioning.

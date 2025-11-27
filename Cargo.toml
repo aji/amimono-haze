@@ -5,10 +5,12 @@ edition = "2024"
 
 [features]
 default = ["storage", "dashboard"]
-storage = ["metadata", "dht", "blob"]
+storage = ["crdt", "metadata", "dht", "blob"]
 dashboard = ["dep:axum"]
 
 blob = []
+crdt = ["controller"]
+controller = []
 dht = ["metadata"]
 metadata = []
 

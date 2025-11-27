@@ -12,6 +12,8 @@ use amimono::config::{AppBuilder, JobBuilder};
 pub mod crdt;
 
 pub(crate) mod client;
+pub(crate) mod controller;
+pub(crate) mod server;
 pub(crate) mod storage;
 
 pub use client::CrdtClient;
@@ -145,6 +147,10 @@ where
     K: Eq + Hash + Serialize + DeserializeOwned + 'static,
     T: StoredCrdt,
 {
+}
+
+pub(crate) fn install_controller(job: &mut JobBuilder, prefix: &str) {
+    job.add_component(controller::component(prefix));
 }
 
 pub(crate) fn install(app: &mut AppBuilder, prefix: &str) {

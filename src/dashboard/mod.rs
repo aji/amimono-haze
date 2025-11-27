@@ -51,6 +51,81 @@ impl Directory for DashboardSysDirectory {
     }
 }
 
+struct DashboardAmimonoDirectory;
+
+impl Directory for DashboardAmimonoDirectory {
+    async fn list(&self) -> TreeResult<Vec<DirEntry>> {
+        let res = runtime::config()
+            .jobs()
+            .map(|j| DirEntry::dir(j.label()))
+            .collect();
+        Ok(res)
+    }
+
+    async fn open_dir(&self, name: &str) -> TreeResult<BoxDirectory> {
+        match runtime::config().job(name) {
+            Some(j) => Ok(DashboardJobDirectory(j.label().to_owned()).boxed()),
+            None => Err(TreeError::NotFound),
+        }
+    }
+
+    async fn open_item(&self, _name: &str) -> TreeResult<Item> {
+        Err(TreeError::NotFound)
+    }
+}
+
+struct DashboardJobDirectory(String);
+
+impl Directory for DashboardJobDirectory {
+    async fn list(&self) -> TreeResult<Vec<DirEntry>> {
+        let res = runtime::config()
+            .job(self.0.as_str())
+            .ok_or(TreeError::NotFound)?
+            .components()
+            .map(|c| DirEntry::item(&c.label))
+            .collect();
+        Ok(res)
+    }
+
+    async fn open_dir(&self, _name: &str) -> TreeResult<BoxDirectory> {
+        Err(TreeError::NotFound)
+    }
+
+    async fn open_item(&self, name: &str) -> TreeResult<Item> {
+        match runtime::config().component(name) {
+            Some(c) => {
+                let discovery = match runtime::discover_all_by_label(name).await {
+                    Err(e) => format!("  Error: {e:?}"),
+                    Ok(locs) => {
+                        if locs.len() > 0 {
+                            locs.into_iter()
+                                .map(|x| format!("- {x:?}"))
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        } else {
+                            "  (empty)".to_string()
+                        }
+                    }
+                };
+
+                let res = Item::new(format!(
+                    "\
+                    Binding type      : {:?}\n\
+                    Binding           : {:?}\n\
+                    \n\
+                    Discovery:\n\
+                    {}\n",
+                    c.binding,
+                    runtime::binding_by_label(name),
+                    discovery
+                ));
+                Ok(res)
+            }
+            None => Err(TreeError::NotFound),
+        }
+    }
+}
+
 struct DashboardDirectory;
 
 impl Directory for DashboardDirectory {
@@ -77,6 +152,7 @@ impl Directory for DashboardDirectory {
 
 static DIRECTORIES: LazyLock<RwLock<HashMap<&'static str, BoxDirectory>>> = LazyLock::new(|| {
     let mut dirs = HashMap::new();
+    dirs.insert("amimono", DashboardAmimonoDirectory.boxed());
     dirs.insert("haze", DashboardSysDirectory.boxed());
     RwLock::new(dirs)
 });
