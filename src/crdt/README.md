@@ -57,24 +57,30 @@ list, scan, or query operations.
 
 - Access patterns are roughly evenly distributed across the key space.
 
-# How it works
+- Outages are acceptable during deployments or reconfigurations.
 
-Replicas are organized into a consistent hashing ring, where each point in the
-key space is assigned to 2 replicas, one primary and one secondary. Reads and
-writes always go to the primary replica, and values are copied to the secondary
-replica.
+This last assumption is significant, but CRDTs work best when clients maintain
+their own copy of the state that is periodically synchronized in full with the
+backing store, rather than relying on the backing store to act as a
+permanently-available source of truth. By allowing the backing store to fail,
+and perhaps even lose data (e.g. when restoring from a backup), the architecture
+and storage requirements become much more tractable, at the expense of requiring
+some cooperation from data users.
 
-## Storage
+## How it works
 
-Values are durably stored in LMDB with the following schema:
+The key space is divided with a consistent hashing ring. Each node is
+represented in the hash ring with multiple virtual nodes. The routing layer
+uses the ring to map keys to replicas and forwards requests appropriately.
 
-* `members` &mdash; A set of network identifiers for hash ring members,
-  including the current node. When this is different from the actual membership,
-  repartitioning is needed.
+A controller component handles repartitioning. To introduce a new node, it takes
+the following steps for each new virtual node:
 
-* `values` &mdash; A map from scope:key pairs to serialized CRDTs.
+- Inform the existing virtual node that it should begin replicating a portion of
+the keyspace to the new node. The routing layer still treats the old node as the
+primary for these keys, but the old node will gradually move its data to the new
+node, forwarding reads and writes as appropriate. The old node will eventually
+reach a state where all reads and writes are simply proxied to the new node.
 
-## Controller
-
-The controller is a stateless component that monitors the set of members and
-automatically coordinates repartitioning.
+- Gradually inform the routing layer about the new node. The routing layer will
+begin to send reads and writes directly to the new node.

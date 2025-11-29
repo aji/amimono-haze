@@ -4,6 +4,7 @@ use std::{
     any::TypeId,
     collections::{HashMap, HashSet},
     hash::Hash,
+    marker::PhantomData,
     sync::{LazyLock, RwLock},
 };
 
@@ -13,8 +14,9 @@ pub mod crdt;
 
 pub(crate) mod client;
 pub(crate) mod controller;
-pub(crate) mod server;
+pub(crate) mod router;
 pub(crate) mod storage;
+pub(crate) mod types;
 
 pub use client::CrdtClient;
 use serde::{Serialize, de::DeserializeOwned};
@@ -157,18 +159,41 @@ pub(crate) fn install(app: &mut AppBuilder, prefix: &str) {
     app.add_job(
         JobBuilder::new()
             .with_label(format!("{prefix}-crdt"))
+            .add_component(router::component(prefix))
             .add_component(storage::component(prefix)),
     );
 }
 
-static SCOPES: LazyLock<RwLock<HashMap<String, TypeId>>> =
+trait StoredCrdtBinding: Send + Sync {
+    fn inner(&self) -> TypeId;
+
+    fn merge(&self, a: &[u8], b: &[u8]) -> Result<Vec<u8>, &'static str>;
+}
+
+struct StoredCrdtBindingImpl<T>(PhantomData<fn() -> T>);
+
+impl<T: StoredCrdt> StoredCrdtBinding for StoredCrdtBindingImpl<T> {
+    fn inner(&self) -> TypeId {
+        TypeId::of::<T>()
+    }
+
+    fn merge(&self, a: &[u8], b: &[u8]) -> Result<Vec<u8>, &'static str> {
+        let a_parsed: T = serde_json::from_slice(a).map_err(|_| "parse failed")?;
+        let b_parsed: T = serde_json::from_slice(b).map_err(|_| "parse failed")?;
+        let c = a_parsed.merge(b_parsed);
+        serde_json::to_vec(&c).map_err(|_| "serialize failed")
+    }
+}
+
+static SCOPES: LazyLock<RwLock<HashMap<String, Box<dyn StoredCrdtBinding>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
 fn bind_scope<T: StoredCrdt>(scope: &str) {
+    let binding = StoredCrdtBindingImpl::<T>(PhantomData);
     SCOPES
         .write()
         .expect("failed to get SCOPES lock")
-        .insert(scope.to_owned(), TypeId::of::<T>());
+        .insert(scope.to_owned(), Box::new(binding));
 }
 
 pub(crate) fn check_scope<T: StoredCrdt>(scope: &str) -> bool {
@@ -176,7 +201,16 @@ pub(crate) fn check_scope<T: StoredCrdt>(scope: &str) -> bool {
         .read()
         .expect("failed to get SCOPES lock")
         .get(scope)
-        .copied()
-        .expect("scope not found");
+        .expect("scope not found")
+        .inner();
     ty == TypeId::of::<T>()
+}
+
+pub(crate) fn merge_in_scope(scope: &str, a: &[u8], b: &[u8]) -> Result<Vec<u8>, &'static str> {
+    SCOPES
+        .read()
+        .expect("failed to get SCOPES lock")
+        .get(scope)
+        .ok_or("scope not found")?
+        .merge(a, b)
 }

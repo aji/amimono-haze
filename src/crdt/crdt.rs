@@ -2,10 +2,12 @@
 
 use std::cmp::Ordering;
 
-use crate::crdt::Crdt;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+
+use crate::crdt::{Crdt, StoredCrdt};
 
 /// Merge by picking the larger of two values.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub struct Max<T>(pub T);
 
 impl<T: Ord> Crdt for Max<T> {
@@ -20,8 +22,10 @@ impl<T: Ord> Crdt for Max<T> {
     }
 }
 
+impl<T: Ord + Serialize + DeserializeOwned + 'static> StoredCrdt for Max<T> {}
+
 /// Merge by picking the smaller of two values.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub struct Min<T>(pub T);
 
 impl<T: Ord> Crdt for Min<T> {
@@ -36,9 +40,11 @@ impl<T: Ord> Crdt for Min<T> {
     }
 }
 
+impl<T: Ord + Serialize + DeserializeOwned + 'static> StoredCrdt for Min<T> {}
+
 /// Merge by picking the value with a larger version, or merging if they have
 /// the same version.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub struct Version<V, T>(pub V, pub T);
 
 impl<V: Ord, T: Crdt> Crdt for Version<V, T> {
@@ -58,3 +64,5 @@ impl<V: Ord, T: Crdt> Crdt for Version<V, T> {
         }
     }
 }
+
+impl<V: Ord + Serialize + DeserializeOwned + 'static, T: StoredCrdt> StoredCrdt for Version<V, T> {}

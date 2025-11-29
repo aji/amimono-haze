@@ -2,19 +2,44 @@ use std::time::Duration;
 
 use amimono::{
     config::{BindingType, ComponentConfig},
-    runtime::Component,
+    runtime::{self, Component, Location},
 };
 use futures::future::BoxFuture;
 
-struct Controller;
+use crate::crdt::{
+    router::{CrdtRouterClient, CrdtRouterComponent},
+    types::RingConfig,
+};
+
+struct Controller {
+    router: CrdtRouterClient,
+}
 
 impl Controller {
     fn new() -> Controller {
-        Controller
+        Controller {
+            router: CrdtRouterClient::new(),
+        }
     }
 
     async fn run_once(&self) -> Result<(), &'static str> {
-        Err("not implemented")
+        let routers = runtime::discover_all::<CrdtRouterComponent>()
+            .await
+            .map_err(|_| "failed to discover routers")?
+            .into_iter()
+            .flat_map(|x| x.http())
+            .collect::<Vec<_>>();
+        if routers.len() == 1 {
+            let config = RingConfig::singleton(&routers[0]);
+            self.router
+                .at(Location::Http(routers[0].to_owned()))
+                .set_ring(config)
+                .await
+                .map_err(|_| "router set_ring failed")?;
+            Ok(())
+        } else {
+            Err("not implemented")
+        }
     }
 
     fn main() -> BoxFuture<'static, ()> {
