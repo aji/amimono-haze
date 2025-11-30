@@ -119,14 +119,10 @@ impl Directory for DashboardJobDirectory {
 
                 let res = Item::new(format!(
                     "\
-                    Binding type      : {:?}\n\
-                    Binding           : {:?}\n\
-                    \n\
+                    Binding: {:?}\n\
                     Discovery:\n\
                     {}\n",
-                    c.binding,
-                    runtime::binding_by_label(name),
-                    discovery
+                    c.binding, discovery
                 ));
                 Ok(res)
             }
