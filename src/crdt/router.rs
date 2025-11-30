@@ -1,32 +1,53 @@
 use amimono::{
     config::ComponentConfig,
     rpc::{RpcError, RpcResult},
-    runtime::Location,
 };
+use sha2::Digest;
 
 use crate::crdt::{
+    ring::{HashRing, NetworkId, RingConfig, RingKey},
     storage::{self, StorageInstance},
-    types::RingConfig,
 };
 
 mod ops {
-    use crate::crdt::types::RingConfig;
+    use crate::crdt::ring::RingConfig;
 
     amimono::rpc_ops! {
+        // public endpoints
         fn get(scope: String, key: String) -> Option<Vec<u8>>;
         fn put(scope: String, key: String, data: Vec<u8>) -> Vec<u8>;
 
+        // storage layer endpoints
         fn get_here(scope: String, key: String) -> Option<Vec<u8>>;
         fn put_here(scope: String, key: String, data: Vec<u8>) -> Vec<u8>;
 
-        fn get_ring() -> RingConfig;
+        // controller endpoints
+        fn get_ring() -> Option<RingConfig>;
         fn set_ring(ring: RingConfig) -> ();
     }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum Verb {
+    Get,
+    Put,
+}
+
+enum Action {
+    ForwardRouter(NetworkId),
+    ForwardStorage(NetworkId),
 }
 
 pub struct CrdtRouter {
     storage: &'static StorageInstance,
     router: CrdtRouterClient,
+}
+
+impl CrdtRouter {
+    fn action(&self, _verb: Verb, ck: &CompositeKey, cf: &RingConfig, ring: &HashRing) -> Action {
+        let ni = cf.network_id(ring.cursor(ck).get()).unwrap().clone();
+        Action::ForwardStorage(ni)
+    }
 }
 
 impl ops::Handler for CrdtRouter {
@@ -38,26 +59,45 @@ impl ops::Handler for CrdtRouter {
     }
 
     async fn get(&self, scope: String, key: String) -> RpcResult<Option<Vec<u8>>> {
-        match self.storage.ring_lookup(&scope, &key).await {
-            Some(tgt) => {
+        let ck = CompositeKey { scope, key };
+        match self
+            .storage
+            .with_ring(|cf, ring| self.action(Verb::Get, &ck, cf, ring))
+            .await
+        {
+            Some(Action::ForwardRouter(to)) => {
+                self.router.at(to.as_location()).get(ck.scope, ck.key).await
+            }
+            Some(Action::ForwardStorage(to)) => {
                 self.router
-                    .at(Location::Http(tgt.clone()))
-                    .get_here(scope, key)
+                    .at(to.as_location())
+                    .get_here(ck.scope, ck.key)
                     .await
             }
-            None => Err(RpcError::Misc(format!("no ring configuration"))),
+            None => Err(RpcError::Misc(format!("no ring config"))),
         }
     }
 
     async fn put(&self, scope: String, key: String, data: Vec<u8>) -> RpcResult<Vec<u8>> {
-        match self.storage.ring_lookup(&scope, &key).await {
-            Some(tgt) => {
+        let ck = CompositeKey { scope, key };
+        match self
+            .storage
+            .with_ring(|cf, ring| self.action(Verb::Put, &ck, cf, ring))
+            .await
+        {
+            Some(Action::ForwardRouter(to)) => {
                 self.router
-                    .at(Location::Http(tgt.clone()))
-                    .put_here(scope, key, data)
+                    .at(to.as_location())
+                    .put(ck.scope, ck.key, data)
                     .await
             }
-            None => Err(RpcError::Misc(format!("no ring configuration"))),
+            Some(Action::ForwardStorage(to)) => {
+                self.router
+                    .at(to.as_location())
+                    .put_here(ck.scope, ck.key, data)
+                    .await
+            }
+            None => Err(RpcError::Misc(format!("no ring config"))),
         }
     }
 
@@ -75,12 +115,25 @@ impl ops::Handler for CrdtRouter {
             .map_err(|e| RpcError::Misc(format!("put failed: {e}")))
     }
 
-    async fn get_ring(&self) -> RpcResult<RingConfig> {
+    async fn get_ring(&self) -> RpcResult<Option<RingConfig>> {
         Ok(self.storage.get_ring_config().await)
     }
 
     async fn set_ring(&self, ring: RingConfig) -> RpcResult<()> {
         Ok(self.storage.set_ring_config(ring).await)
+    }
+}
+
+pub struct CompositeKey {
+    pub scope: String,
+    pub key: String,
+}
+
+impl RingKey for CompositeKey {
+    fn as_sha256(&self) -> [u8; 32] {
+        let data = format!("{}\0{}", self.scope, self.key);
+        let hash = sha2::Sha256::digest(data);
+        hash.try_into().unwrap()
     }
 }
 

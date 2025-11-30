@@ -14,9 +14,9 @@ pub mod crdt;
 
 pub(crate) mod client;
 pub(crate) mod controller;
+pub(crate) mod ring;
 pub(crate) mod router;
 pub(crate) mod storage;
-pub(crate) mod types;
 
 pub use client::CrdtClient;
 use serde::{Serialize, de::DeserializeOwned};

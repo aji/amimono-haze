@@ -1,21 +1,22 @@
-use std::{collections::HashMap, io, path::PathBuf};
+use std::{io, path::PathBuf};
 
 use amimono::{
     config::{BindingType, ComponentConfig},
     runtime::{self, Component},
 };
 use futures::future::BoxFuture;
-use sha2::Digest;
+use lockable::LockPool;
 use tokio::sync::RwLock;
 
-use crate::{
-    crdt::{merge_in_scope, types::RingConfig},
-    util::{hashring::HashRing, hex::Hex},
+use crate::crdt::{
+    merge_in_scope,
+    ring::{HashRing, RingConfig},
 };
 
 pub struct StorageInstance {
+    root: PathBuf,
     ring: RwLock<RingStorage>,
-    root: RwLock<PathBuf>,
+    files: LockPool<PathBuf>,
 }
 
 impl StorageInstance {
@@ -23,101 +24,131 @@ impl StorageInstance {
         let root = runtime::storage::<StorageComponent>()
             .await
             .expect("failed to get storage location");
-        tokio::fs::create_dir_all(root.join("storage"))
-            .await
-            .unwrap();
         let ring = RingStorage::load(root.join("ring.json")).await;
         StorageInstance {
+            root,
             ring: RwLock::new(ring),
-            root: RwLock::new(root),
+            files: LockPool::new(),
         }
     }
 
-    pub async fn get_ring_config(&self) -> RingConfig {
-        self.ring.read().await.config.clone()
+    pub async fn get_ring_config(&self) -> Option<RingConfig> {
+        self.ring
+            .read()
+            .await
+            .config
+            .as_ref()
+            .map(|(x, _)| x.clone())
     }
 
     pub async fn set_ring_config(&self, ring: RingConfig) -> () {
         self.ring.write().await.set(ring).await;
     }
 
-    pub async fn ring_lookup(&self, scope: &str, key: &str) -> Option<String> {
-        let composite = mk_composite_key(scope, key);
+    async fn with_lock<F, T>(&self, scope: &str, key: &str, handle: F) -> T
+    where
+        F: AsyncFnOnce(PathBuf) -> T,
+    {
+        let path = mk_path(scope, key);
+        let lock = self.files.async_lock(path.clone()).await;
+        let res = handle(self.root.join("storage").join(path)).await;
+        std::mem::drop(lock);
+        res
+    }
+
+    pub async fn with_ring<F, T>(&self, handle: F) -> Option<T>
+    where
+        F: FnOnce(&RingConfig, &HashRing) -> T,
+    {
         self.ring
             .read()
             .await
-            .ring
-            .lookup(&composite)
-            .next()
-            .cloned()
+            .config
+            .as_ref()
+            .map(|(cf, r)| handle(&cf, &r))
     }
 
     pub async fn get_here(&self, scope: &str, key: &str) -> io::Result<Option<Vec<u8>>> {
-        let root = self.root.read().await;
-        let path = root.join("storage").join(mk_sha256(scope, key));
-        if path.exists() {
-            tokio::fs::read(path).await.map(|x| Some(x))
-        } else {
-            Ok(None)
-        }
+        self.with_lock(scope, key, async |path| {
+            if path.exists() {
+                tokio::fs::read(path).await.map(|x| Some(x))
+            } else {
+                Ok(None)
+            }
+        })
+        .await
     }
 
     pub async fn put_here(&self, scope: &str, key: &str, data: &[u8]) -> io::Result<Vec<u8>> {
-        let root = self.root.write().await;
-        let path = root.join("storage").join(mk_sha256(scope, key));
-        if path.exists() {
-            let current = tokio::fs::read(&path).await?;
-            let next = merge_in_scope(scope, &current, data).map_err(io::Error::other)?;
-            tokio::fs::write(path, &next).await?;
-            Ok(next)
-        } else {
-            tokio::fs::write(path, data).await?;
-            Ok(data.to_owned())
-        }
+        self.with_lock(scope, key, async |path| {
+            if path.exists() {
+                let current = tokio::fs::read(&path).await?;
+                let next = merge_in_scope(scope, &current, data).map_err(io::Error::other)?;
+                tokio::fs::write(path, &next).await?;
+                Ok(next)
+            } else {
+                tokio::fs::create_dir_all(path.parent().unwrap()).await?;
+                tokio::fs::write(path, data).await?;
+                Ok(data.to_owned())
+            }
+        })
+        .await
+    }
+
+    pub async fn delete_here(&self, scope: &str, key: &str) -> io::Result<()> {
+        self.with_lock(scope, key, async |path| {
+            if path.exists() {
+                tokio::fs::remove_file(path).await?;
+            }
+            Ok(())
+        })
+        .await
     }
 }
 
-fn mk_composite_key(scope: &str, key: &str) -> String {
-    format!("{scope}\0{key}")
+fn mk_path(scope: &str, key: &str) -> PathBuf {
+    let scope = mk_sanitized(scope);
+    let key = mk_sanitized(key);
+    scope.join(key)
 }
 
-fn mk_sha256(scope: &str, key: &str) -> String {
-    let digest = sha2::Sha256::digest(&mk_composite_key(scope, key));
-    let bytes: [u8; 32] = digest.try_into().unwrap();
-    format!("{}", Hex(&bytes))
+fn mk_sanitized(x: &str) -> PathBuf {
+    let x = x
+        .replace("%", "%25")
+        .replace("*", "%2A")
+        .replace("/", "%2F")
+        .replace("?", "%3F")
+        .replace("\0", "%00");
+    PathBuf::from(x)
 }
 
 struct RingStorage {
     path: PathBuf,
-    config: RingConfig,
-    ring: HashRing<String>,
+    config: Option<(RingConfig, HashRing)>,
 }
 
 impl RingStorage {
     async fn load(path: PathBuf) -> RingStorage {
-        let config: RingConfig = if path.exists() {
+        let config = if path.exists() {
             let data = tokio::fs::read(&path)
                 .await
                 .expect("could not read ring config file");
-            serde_json::from_slice(&data).expect("could not parse ring config file")
+            let config = serde_json::from_slice(&data).expect("could not parse ring config file");
+            let ring = HashRing::from_config(&config);
+            Some((config, ring))
         } else {
-            RingConfig {
-                nodes: HashMap::new(),
-            }
+            None
         };
-        let members = config.nodes.iter().map(|(k, v)| (k, v.clone()));
-        let ring = HashRing::from_members(members);
-        RingStorage { path, config, ring }
+        RingStorage { path, config }
     }
 
-    async fn set(&mut self, ring: RingConfig) {
-        let data = serde_json::to_vec(&ring).expect("could not convert ring config to json");
+    async fn set(&mut self, config: RingConfig) {
+        let data = serde_json::to_vec(&config).expect("could not convert ring config to json");
         tokio::fs::write(&self.path, data)
             .await
             .expect("could not write ring config file");
-        let members = ring.nodes.iter().map(|(k, v)| (k, v.clone()));
-        self.ring = HashRing::from_members(members);
-        self.config = ring;
+        let ring = HashRing::from_config(&config);
+        self.config = Some((config, ring));
     }
 }
 
