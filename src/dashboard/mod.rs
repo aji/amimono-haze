@@ -5,7 +5,7 @@ use std::{
 };
 
 use amimono::{
-    config::{AppBuilder, Binding, BindingType, ComponentConfig, JobBuilder},
+    config::{AppBuilder, Binding, ComponentConfig, JobBuilder},
     runtime::{self, Component},
 };
 use axum::{Router, http::Uri, response::IntoResponse, routing::get};
@@ -21,6 +21,8 @@ mod crdt;
 mod dht;
 #[cfg(feature = "metadata")]
 mod metadata;
+
+const PORT: u16 = 8585;
 
 struct DashboardSysDirectory;
 
@@ -101,7 +103,7 @@ impl Directory for DashboardJobDirectory {
     async fn open_item(&self, name: &str) -> TreeResult<Item> {
         match runtime::config().component(name) {
             Some(c) => {
-                let discovery = match runtime::discover_all_by_label(name).await {
+                let discovery = match runtime::discover_by_label(name).await {
                     Err(e) => format!("  Error: {e:?}"),
                     Ok(locs) => {
                         if locs.len() > 0 {
@@ -189,10 +191,7 @@ fn app_router() -> Router<()> {
 }
 
 async fn dashboard_entry_impl() {
-    let binding: SocketAddr = match runtime::binding::<DashboardComponent>() {
-        Binding::None => panic!("no binding configured for dashboard"),
-        Binding::Http(port) => ([0, 0, 0, 0], port).into(),
-    };
+    let binding: SocketAddr = ([0, 0, 0, 0], PORT).into();
     let app = app_router();
     let listener = tokio::net::TcpListener::bind(&binding)
         .await
@@ -217,7 +216,7 @@ fn component(prefix: &str) -> ComponentConfig {
     ComponentConfig {
         label: format!("{prefix}-dashboard"),
         id: DashboardComponent::id(),
-        binding: BindingType::HttpFixed(8585),
+        binding: Binding::Tcp(PORT),
         is_stateful: false,
         entry: dashboard_entry,
     }

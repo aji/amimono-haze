@@ -1,5 +1,5 @@
 use amimono::{
-    config::{BindingType, ComponentConfig},
+    config::{Binding, ComponentConfig},
     runtime::{self, Component},
 };
 use futures::future::BoxFuture;
@@ -133,7 +133,7 @@ pub fn component(prefix: &str) -> ComponentConfig {
     ComponentConfig {
         label: format!("{prefix}-md-storage"),
         id: StorageComponent::id(),
-        binding: BindingType::None,
+        binding: Binding::None,
         is_stateful: true,
         entry: md_storage_entry,
     }

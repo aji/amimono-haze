@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use amimono::{
-    config::{BindingType, ComponentConfig},
-    runtime::{self, Component},
+    config::{Binding, ComponentConfig},
+    runtime::{self, Component, Location},
 };
 use futures::future::BoxFuture;
 
@@ -25,11 +25,14 @@ impl Controller {
     }
 
     async fn get_desired_config(&self) -> Result<RingConfig, &'static str> {
-        let routers = runtime::discover_all::<CrdtRouterComponent>()
+        let routers = runtime::discover::<CrdtRouterComponent>()
             .await
             .map_err(|_| "failed to discover routers")?
             .into_iter()
-            .flat_map(|x| x.http())
+            .flat_map(|x| match x {
+                Location::Ephemeral(_) => None,
+                Location::Stable(x) => Some(x),
+            })
             .collect::<Vec<_>>();
         if routers.len() == 1 {
             Ok(RingConfig::ugly_singleton_delete_me(&routers[0]))
@@ -79,7 +82,7 @@ pub fn component(prefix: &str) -> ComponentConfig {
     ComponentConfig {
         label: format!("{prefix}-crdt-controller"),
         id: Controller::id(),
-        binding: BindingType::None,
+        binding: Binding::None,
         is_stateful: false,
         entry: Controller::main,
     }

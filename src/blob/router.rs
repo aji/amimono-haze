@@ -31,7 +31,7 @@ impl ops::Handler for BlobService {
 
     async fn put(&self, data: Vec<u8>) -> RpcResult<String> {
         let peer = {
-            let peers = runtime::discover_all::<ops::Component<Self>>()
+            let peers = runtime::discover::<ops::Component<Self>>()
                 .await
                 .map_err(|e| RpcError::Misc(e.to_string()))?;
             peers.choose(&mut rand::rng()).cloned()
@@ -49,7 +49,7 @@ impl ops::Handler for BlobService {
         }
 
         let peers = {
-            let mut peers = runtime::discover_all::<ops::Component<Self>>()
+            let mut peers = runtime::discover::<ops::Component<Self>>()
                 .await
                 .map_err(|e| RpcError::Misc(e.to_string()))?;
             peers.shuffle(&mut rand::rng());

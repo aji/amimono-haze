@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use amimono::{
-    config::{BindingType, ComponentConfig},
+    config::{Binding, ComponentConfig},
     runtime::{self, Component},
 };
 use futures::future::BoxFuture;
@@ -78,7 +78,7 @@ pub fn component(prefix: &str) -> ComponentConfig {
     ComponentConfig {
         label: format!("{prefix}-blob-storage"),
         id: StorageComponent::id(),
-        binding: BindingType::None,
+        binding: Binding::None,
         is_stateful: true,
         entry: blob_storage_entry,
     }

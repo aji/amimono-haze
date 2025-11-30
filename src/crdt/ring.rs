@@ -29,7 +29,7 @@ pub struct NetworkId(String);
 
 impl NetworkId {
     pub fn as_location(&self) -> Location {
-        Location::Http(self.0.clone())
+        Location::Stable(self.0.clone())
     }
 }
 

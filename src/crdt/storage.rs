@@ -1,7 +1,7 @@
 use std::{io, path::PathBuf};
 
 use amimono::{
-    config::{BindingType, ComponentConfig},
+    config::{Binding, ComponentConfig},
     runtime::{self, Component},
 };
 use futures::future::BoxFuture;
@@ -173,7 +173,7 @@ pub fn component(prefix: &str) -> ComponentConfig {
     ComponentConfig {
         label: format!("{prefix}-crdt-storage"),
         id: StorageComponent::id(),
-        binding: BindingType::None,
+        binding: Binding::None,
         is_stateful: true,
         entry: storage_main,
     }
