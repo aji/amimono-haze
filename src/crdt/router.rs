@@ -1,6 +1,7 @@
 use amimono::{
     config::ComponentConfig,
     rpc::{RpcError, RpcResult},
+    runtime::{self, Location},
 };
 use sha2::Digest;
 
@@ -34,11 +35,12 @@ enum Verb {
 }
 
 enum Action {
-    ForwardRouter(NetworkId),
-    ForwardStorage(NetworkId),
+    Forward(NetworkId),
+    Store,
 }
 
 pub struct CrdtRouter {
+    myself: NetworkId,
     storage: &'static StorageInstance,
     router: CrdtRouterClient,
 }
@@ -46,13 +48,28 @@ pub struct CrdtRouter {
 impl CrdtRouter {
     fn action(&self, _verb: Verb, ck: &CompositeKey, cf: &RingConfig, ring: &HashRing) -> Action {
         let ni = cf.network_id(ring.cursor(ck).get()).unwrap().clone();
-        Action::ForwardStorage(ni)
+        if ni == self.myself {
+            Action::Store
+        } else {
+            Action::Forward(ni)
+        }
     }
 }
 
 impl ops::Handler for CrdtRouter {
     async fn new() -> CrdtRouter {
+        let myself = {
+            let loc = runtime::myself::<CrdtRouterComponent>()
+                .await
+                .expect("could not get my location");
+            match loc {
+                Location::Ephemeral(_) => panic!("CrdtRouter cannot have an ephemeral location"),
+                Location::Stable(x) => NetworkId(x),
+            }
+        };
+
         CrdtRouter {
+            myself,
             storage: storage::instance(),
             router: CrdtRouterClient::new(),
         }
@@ -60,44 +77,32 @@ impl ops::Handler for CrdtRouter {
 
     async fn get(&self, scope: String, key: String) -> RpcResult<Option<Vec<u8>>> {
         let ck = CompositeKey { scope, key };
-        match self
+        let action = self
             .storage
             .with_ring(|cf, ring| self.action(Verb::Get, &ck, cf, ring))
             .await
-        {
-            Some(Action::ForwardRouter(to)) => {
-                self.router.at(to.as_location()).get(ck.scope, ck.key).await
-            }
-            Some(Action::ForwardStorage(to)) => {
-                self.router
-                    .at(to.as_location())
-                    .get_here(ck.scope, ck.key)
-                    .await
-            }
-            None => Err(RpcError::Misc(format!("no ring config"))),
+            .ok_or(RpcError::Misc(format!("no ring config")))?;
+        if let Action::Forward(to) = action {
+            self.router.at(to.as_location()).get(ck.scope, ck.key).await
+        } else {
+            self.get_here(ck.scope, ck.key).await
         }
     }
 
     async fn put(&self, scope: String, key: String, data: Vec<u8>) -> RpcResult<Vec<u8>> {
         let ck = CompositeKey { scope, key };
-        match self
+        let action = self
             .storage
             .with_ring(|cf, ring| self.action(Verb::Put, &ck, cf, ring))
             .await
-        {
-            Some(Action::ForwardRouter(to)) => {
-                self.router
-                    .at(to.as_location())
-                    .put(ck.scope, ck.key, data)
-                    .await
-            }
-            Some(Action::ForwardStorage(to)) => {
-                self.router
-                    .at(to.as_location())
-                    .put_here(ck.scope, ck.key, data)
-                    .await
-            }
-            None => Err(RpcError::Misc(format!("no ring config"))),
+            .ok_or(RpcError::Misc(format!("no ring config")))?;
+        if let Action::Forward(to) = action {
+            self.router
+                .at(to.as_location())
+                .put(ck.scope, ck.key, data)
+                .await
+        } else {
+            self.put_here(ck.scope, ck.key, data).await
         }
     }
 

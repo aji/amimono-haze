@@ -13,8 +13,8 @@ pub trait RingKey {
 
 /// A virtual node ID. Each physical node will have multiple of these in the
 /// consistent hash ring, for a more even partitioning.
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct VirtualNodeId(String);
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct VirtualNodeId(pub String);
 
 impl RingKey for VirtualNodeId {
     fn as_sha256(&self) -> [u8; 32] {
@@ -23,9 +23,9 @@ impl RingKey for VirtualNodeId {
     }
 }
 
-/// The network ID. Each physical node has exactly one of these.
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct NetworkId(String);
+/// A stable network ID. Each physical node has exactly one of these.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct NetworkId(pub String);
 
 impl NetworkId {
     pub fn as_location(&self) -> Location {
@@ -48,17 +48,18 @@ pub struct RingConfig {
 }
 
 impl RingConfig {
-    pub fn ugly_singleton_delete_me(node: &str) -> RingConfig {
-        RingConfig {
-            nodes: [(VirtualNodeId(node.to_owned()), NetworkId(node.to_owned()))].into(),
-            to_add: HashSet::new(),
-            to_remove: HashSet::new(),
-        }
-    }
-
     /// Get the network ID for a virtual node
     pub fn network_id(&self, vn: &VirtualNodeId) -> Option<&NetworkId> {
         self.nodes.get(vn)
+    }
+
+    /// Get the weight of each network ID in the ring
+    pub fn weights(&self) -> HashMap<NetworkId, usize> {
+        let mut res = HashMap::new();
+        for (_, ni) in self.nodes.iter() {
+            *res.entry(ni.clone()).or_insert(0) += 1;
+        }
+        res
     }
 }
 
