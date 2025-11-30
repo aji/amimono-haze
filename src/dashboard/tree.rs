@@ -3,6 +3,7 @@ use std::{borrow::Cow, sync::Arc};
 use amimono::rpc::RpcError;
 use axum::{http::StatusCode, response::Html};
 use futures::future::BoxFuture;
+use serde::Serialize;
 
 pub type TreeResult<T> = Result<T, TreeError>;
 
@@ -105,6 +106,10 @@ impl Item {
         Item {
             value: value.into(),
         }
+    }
+
+    pub fn json<X: Serialize>(value: &X) -> Item {
+        Item::new(serde_json::to_string_pretty(value).unwrap())
     }
 }
 

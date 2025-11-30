@@ -15,6 +15,8 @@ use crate::dashboard::tree::{BoxDirectory, DirEntry, Directory, Item, TreeError,
 
 pub mod tree;
 
+#[cfg(feature = "crdt")]
+mod crdt;
 #[cfg(feature = "dht")]
 mod dht;
 #[cfg(feature = "metadata")]
@@ -26,6 +28,9 @@ impl Directory for DashboardSysDirectory {
     async fn list(&self) -> TreeResult<Vec<DirEntry>> {
         let mut entries = Vec::new();
 
+        if cfg!(feature = "crdt") {
+            entries.push(DirEntry::dir("crdt"));
+        }
         if cfg!(feature = "dht") {
             entries.push(DirEntry::dir("dht"));
         }
@@ -38,6 +43,8 @@ impl Directory for DashboardSysDirectory {
 
     async fn open_dir(&self, name: &str) -> TreeResult<BoxDirectory> {
         match name {
+            #[cfg(feature = "crdt")]
+            "crdt" => Ok(crdt::CrdtDirectory.boxed()),
             #[cfg(feature = "dht")]
             "dht" => Ok(dht::DhtDirectory.boxed()),
             #[cfg(feature = "metadata")]
