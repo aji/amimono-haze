@@ -122,7 +122,7 @@ impl ops::Handler for CrdtRouter {
     }
 
     async fn updating(&self) -> RpcResult<bool> {
-        Ok(false)
+        Ok(rand::random_bool(0.9))
     }
 
     async fn get_ring(&self) -> RpcResult<Option<RingConfig>> {

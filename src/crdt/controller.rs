@@ -175,13 +175,14 @@ impl Controller {
             Ok(_) => {
                 log::info!("updated config at {to:?}");
                 self.known.insert(to.clone(), ActualConfig::Configured(cf));
+                Ok(())
             }
             Err(e) => {
                 log::info!("failed to update config at {to:?}: {e:?}");
                 self.known.remove(&to);
+                Err(format!("{e:?}"))
             }
         }
-        Ok(())
     }
 
     async fn push_config(&mut self, to: &NetworkId, cf: RingConfig) -> CtlResult<()> {
@@ -265,7 +266,11 @@ impl Controller {
         // First we check if there are any unconfigured nodes. If so, we'll
         // simply bootstrap them.
         if let Some(ni) = unconfigured.iter().next() {
-            return Ok(BootstrapOne(ni.clone(), cc.ring));
+            let ring = RingConfig {
+                nodes: cc.ring.nodes.clone(),
+                update: None,
+            };
+            return Ok(BootstrapOne(ni.clone(), ring));
         }
 
         // Then we check if there is anything in progress. All we need to do is
@@ -356,6 +361,7 @@ impl Controller {
             .map_err(|e| format!("failed to check if {old_ni:?} is updating: {e:?}"))?;
 
         if updating {
+            log::debug!("{old_ni:?} still updating...");
             return Ok(NextIter::Wait);
         }
 
@@ -424,7 +430,7 @@ impl Controller {
                 let iter = match controller.run_once().await {
                     Ok(x) => x,
                     Err(e) => {
-                        log::warn!("controller iter failed: {e:?}");
+                        log::warn!("controller iter failed: {e}");
                         NextIter::Wait
                     }
                 };

@@ -143,10 +143,11 @@ impl RingStorage {
     }
 
     async fn set(&mut self, config: RingConfig) {
-        let data = serde_json::to_vec(&config).expect("could not convert ring config to json");
+        let data =
+            serde_json::to_vec_pretty(&config).expect("could not convert ring config to json");
         tokio::fs::write(&self.path, data)
             .await
-            .expect("could not write ring config file");
+            .expect("write ring config failed");
         let ring = HashRing::from_config(&config);
         self.config = Some((config, ring));
     }

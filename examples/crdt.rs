@@ -80,7 +80,7 @@ impl Component for Driver {
 
 fn driver_component() -> ComponentConfig {
     ComponentConfig {
-        label: "driver".to_owned(),
+        label: "crdt-driver".to_owned(),
         id: Driver::id(),
         binding: Binding::None,
         is_stateful: false,
