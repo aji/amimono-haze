@@ -23,6 +23,7 @@ mod ops {
         fn put_here(scope: String, key: String, data: Vec<u8>) -> Vec<u8>;
 
         // controller endpoints
+        fn updating() -> bool;
         fn get_ring() -> Option<RingConfig>;
         fn set_ring(ring: RingConfig) -> ();
     }
@@ -118,6 +119,10 @@ impl ops::Handler for CrdtRouter {
             .put_here(&scope, &key, &data)
             .await
             .map_err(|e| RpcError::Misc(format!("put failed: {e}")))
+    }
+
+    async fn updating(&self) -> RpcResult<bool> {
+        Ok(false)
     }
 
     async fn get_ring(&self) -> RpcResult<Option<RingConfig>> {

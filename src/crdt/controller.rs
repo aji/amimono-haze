@@ -10,7 +10,7 @@ use amimono::{
 use futures::future::BoxFuture;
 
 use crate::crdt::{
-    ring::{HashRing, NetworkId, RingConfig, VirtualNodeId},
+    ring::{HashRing, NetworkId, RingConfig, RingUpdateConfig, VirtualNodeId},
     router::{CrdtRouterClient, CrdtRouterComponent},
 };
 
@@ -28,10 +28,6 @@ impl DesiredConfig {
         DesiredConfig { weight }
     }
 
-    fn is_empty(&self) -> bool {
-        self.weight.is_empty()
-    }
-
     fn as_ring_config(&self) -> RingConfig {
         let mut nodes = HashMap::new();
         for (ni, w) in self.weight.iter() {
@@ -42,16 +38,16 @@ impl DesiredConfig {
         }
         RingConfig {
             nodes,
-            to_add: HashSet::new(),
-            to_remove: HashSet::new(),
+            update: None,
         }
     }
 }
 
 fn mk_virtual_node(NetworkId(ni): &NetworkId, i: usize) -> VirtualNodeId {
-    VirtualNodeId(format!("{i}:{ni}"))
+    VirtualNodeId(format!("{ni}/{i:02x}"))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum ActualConfig {
     Configured(RingConfig),
     Unconfigured,
@@ -74,17 +70,91 @@ impl ActualConfig {
 
     fn as_config(&self) -> Option<&RingConfig> {
         match self {
-            ActualConfig::Configured(config) => Some(config),
+            ActualConfig::Configured(x) => Some(x),
             _ => None,
         }
     }
 }
 
+#[derive(Clone, Debug)]
+struct ClusterConfig {
+    ring: RingConfig,
+}
+
+impl ClusterConfig {
+    fn parse(known: &HashMap<NetworkId, ActualConfig>) -> CtlResult<ClusterConfig> {
+        let configs: Vec<ClusterConfig> = {
+            let mut configs = Vec::new();
+            for v in known.values() {
+                if let ActualConfig::Configured(ring) = v {
+                    configs.push(Self::parse_one(ring)?);
+                }
+            }
+            configs
+        };
+
+        let update = {
+            let mut updates = configs.iter().flat_map(|x| x.ring.update.clone());
+            let update = updates.next();
+            if let Some(u) = updates.next() {
+                Err(format!("cluster has multiple active updates: {:?}", u))?;
+            }
+            update
+        };
+
+        let first = configs
+            .iter()
+            .next()
+            .cloned()
+            .ok_or(format!("no configs"))?;
+        let mut nodes_with_update = first.ring.nodes.clone();
+        let mut nodes_without_update = first.ring.nodes.clone();
+
+        if let Some(u) = update.as_ref() {
+            match u {
+                RingUpdateConfig::ToAdd { vn, ni } => {
+                    nodes_without_update.remove(vn);
+                    nodes_with_update.insert(vn.clone(), ni.clone());
+                }
+                RingUpdateConfig::ToRemove { vn, ni } => {
+                    nodes_with_update.remove(vn);
+                    nodes_without_update.insert(vn.clone(), ni.clone());
+                }
+            }
+        }
+
+        for cc in configs.iter() {
+            if (cc.ring.nodes != nodes_with_update && cc.ring.nodes != nodes_without_update)
+                || (cc.ring.update != None && cc.ring.update != update)
+            {
+                Err(format!("cluster has inconsistent config"))?;
+            }
+        }
+
+        Ok(ClusterConfig {
+            ring: RingConfig {
+                nodes: nodes_without_update,
+                update,
+            },
+        })
+    }
+
+    fn parse_one(ring: &RingConfig) -> CtlResult<ClusterConfig> {
+        Ok(ClusterConfig { ring: ring.clone() })
+    }
+}
+
 enum Action {
-    None,
-    Bootstrap,
-    BeginAdd(VirtualNodeId, NetworkId),
-    TryFinishAdd(VirtualNodeId, NetworkId, NetworkId),
+    Nothing,
+    BootstrapAll,
+    BootstrapOne(NetworkId, RingConfig),
+    BeginAdd(ClusterConfig, VirtualNodeId, NetworkId),
+    TryFinishAdd(ClusterConfig, VirtualNodeId, NetworkId),
+}
+
+enum NextIter {
+    Fast,
+    Wait,
 }
 
 struct Controller {
@@ -100,7 +170,7 @@ impl Controller {
         }
     }
 
-    async fn push_config(&mut self, to: &NetworkId, cf: RingConfig) -> CtlResult<()> {
+    async fn push_config_force(&mut self, to: &NetworkId, cf: RingConfig) -> CtlResult<()> {
         match self.router.at(to.as_location()).set_ring(cf.clone()).await {
             Ok(_) => {
                 log::info!("updated config at {to:?}");
@@ -112,6 +182,15 @@ impl Controller {
             }
         }
         Ok(())
+    }
+
+    async fn push_config(&mut self, to: &NetworkId, cf: RingConfig) -> CtlResult<()> {
+        if self.known.get(to).and_then(|x| x.as_config()) == Some(&cf) {
+            log::debug!("skipping push_config for {to:?}: known config matches");
+            Ok(())
+        } else {
+            self.push_config_force(to, cf).await
+        }
     }
 
     async fn get_desired_config(&self) -> CtlResult<DesiredConfig> {
@@ -155,131 +234,77 @@ impl Controller {
         Ok(())
     }
 
-    fn known_configured(&self) -> impl Iterator<Item = (&NetworkId, &RingConfig)> {
-        self.known.iter().flat_map(|(k, v)| match v.as_config() {
-            Some(cf) => Some((k, cf)),
-            None => None,
-        })
-    }
-
     fn action(&self, desired: &DesiredConfig) -> CtlResult<Action> {
-        // The implied config is determined by which nodes are currently
-        // configured. In the steady state, all configured nodes have a
-        // configuration that matches the implied config. The remaining
-        // unconfigured nodes in the desired config are to be added.
-        let implied = {
-            let configured = self
-                .known
-                .iter()
-                .filter(|(_, cf)| cf.is_configured())
-                .map(|(ni, _)| ni)
-                .cloned();
-            DesiredConfig::from_nodes(configured)
-        };
+        use Action::*;
 
-        // If the implied configuration is empty, i.e. no nodes are configured,
-        // then we can just do a bootstrap.
-        if implied.is_empty() {
-            return Ok(Action::Bootstrap);
+        let configured: Vec<NetworkId> = self
+            .known
+            .iter()
+            .filter(|(_, cf)| cf.is_configured())
+            .map(|(ni, _)| ni)
+            .cloned()
+            .collect();
+        let unconfigured: Vec<NetworkId> = self
+            .known
+            .iter()
+            .filter(|(_, cf)| cf.is_unconfigured())
+            .map(|(ni, _)| ni)
+            .cloned()
+            .collect();
+
+        // If no nodes are configured, then we just do a full bootstrap.
+        if configured.is_empty() {
+            return Ok(BootstrapAll);
         }
 
         // Otherwise we have to decide on a course of action. The first thing
         // we'll do is verify that the current state is something we can work
-        // with.
-        self.action_preconditions(&implied, desired)?;
+        // with, by consolidating all the various configs.
+        let cc = ClusterConfig::parse(&self.known)?;
 
-        // First we check if there is anything in progress. If so, we'll start
-        // there.
-        if let Some(action) = self.action_in_progress(&implied, desired)? {
+        // First we check if there are any unconfigured nodes. If so, we'll
+        // simply bootstrap them.
+        if let Some(ni) = unconfigured.iter().next() {
+            return Ok(BootstrapOne(ni.clone(), cc.ring));
+        }
+
+        // Then we check if there is anything in progress. All we need to do is
+        // continue those.
+        if let Some(u) = cc.ring.update.clone() {
+            use RingUpdateConfig::*;
+            let action = match u {
+                ToAdd { vn, ni } => TryFinishAdd(cc, vn, ni),
+                ToRemove { .. } => todo!(),
+            };
             return Ok(action);
         }
 
         // If not, we'll check if there's anything we can start doing.
-        if let Some(action) = self.action_to_start(&implied, desired)? {
+        if let Some(action) = self.action_to_start(cc, desired)? {
             return Ok(action);
         }
 
         // Otherwise there is nothing for us to do!
-        Ok(Action::None)
-    }
-
-    fn action_preconditions(
-        &self,
-        implied: &DesiredConfig,
-        desired: &DesiredConfig,
-    ) -> CtlResult<()> {
-        // every time a to_add vn appears in a node's RingConfig, we need to
-        // verify that either the vn's range belongs to the node itself, or to
-        // the previous node in the ring, since these are the two nodes involved
-        // in the to-add operation
-        for (ni, cf) in self.known_configured() {
-            let ring = HashRing::from_config(cf);
-            let n = cf.to_add.len();
-            if n > 1 {
-                Err(format!("{ni:?} config has to_add.len() > 1"))?;
-            }
-            if let Some(vn) = cf.to_add.iter().next() {
-                let cur0 = ring.cursor(vn);
-                let cur1 = cur0.prev();
-                let vn0 = cur0.get();
-                let vn1 = cur1.get();
-                let ni0 = cf
-                    .network_id(vn0)
-                    .ok_or(format!("precond: {ni:?} has unknown vnid {vn0:?}"))?;
-                let ni1 = cf
-                    .network_id(vn1)
-                    .ok_or(format!("precond: {ni:?} has unknown vnid {vn1:?}"))?;
-                if ni != ni0 && ni != ni1 {
-                    Err(format!(
-                        "precond: to_add {vn:?} is on the wrong node {ni:?}"
-                    ))?;
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    fn action_in_progress(
-        &self,
-        implied: &DesiredConfig,
-        desired: &DesiredConfig,
-    ) -> CtlResult<Option<Action>> {
-        // there can be at most one ongoing to-add in the cluster at a time. in
-        // these situations, both nodes have the to-add config
-
-        let mut to_add: HashSet<(NetworkId, VirtualNodeId)> = HashSet::new();
-        for (ni0, cf) in self.known_configured() {
-            for vn in cf.to_add.iter() {
-                let ni = cf
-                    .network_id(vn)
-                    .ok_or(format!("progress: {ni0:?} has unknown vnid {vn:?}"))?;
-                to_add.insert((ni.clone(), vn.clone()));
-            }
-        }
-
-        if to_add.len() == 0 {
-            // do nothing
-        } else if to_add.len() > 1 {
-            return Err(format!("too many ongoing to-adds: {to_add:?}"));
-        } else {
-            // BIG TODO HERE
-        }
-
-        Ok(None)
+        Ok(Nothing)
     }
 
     fn action_to_start(
         &self,
-        implied: &DesiredConfig,
+        cc: ClusterConfig,
         desired: &DesiredConfig,
     ) -> CtlResult<Option<Action>> {
-        // we may need to start adding a new virtual node. the new node can be
-        // either an additional virtual node that isn't
+        let target = desired.as_ring_config();
+
+        for (vn, ni) in target.nodes.into_iter() {
+            if !cc.ring.nodes.contains_key(&vn) {
+                return Ok(Some(Action::BeginAdd(cc, vn, ni)));
+            }
+        }
+
         Ok(None)
     }
 
-    async fn do_bootstrap(&mut self, desired: &DesiredConfig) -> CtlResult<()> {
+    async fn do_bootstrap_all(&mut self, desired: &DesiredConfig) -> CtlResult<()> {
         let cf = desired.as_ring_config();
 
         // It's possible for this to fail if one of the bootstrap nodes has died
@@ -293,7 +318,72 @@ impl Controller {
         Ok(())
     }
 
-    async fn run_once(&mut self) -> CtlResult<()> {
+    async fn do_begin_add(
+        &mut self,
+        cc: ClusterConfig,
+        vn: VirtualNodeId,
+        ni: NetworkId,
+    ) -> CtlResult<()> {
+        let ring = HashRing::from_nodes(cc.ring.nodes.keys().cloned());
+
+        let old_vn = ring.cursor(&vn).get();
+        let old_ni = cc.ring.network_id(&old_vn).ok_or("no ni for target vn")?;
+
+        let cf = RingConfig {
+            nodes: cc.ring.nodes.clone(),
+            update: Some(RingUpdateConfig::ToAdd { vn, ni }),
+        };
+
+        self.push_config(old_ni, cf).await
+    }
+
+    async fn do_try_finish_add(
+        &mut self,
+        cc: ClusterConfig,
+        vn: VirtualNodeId,
+        ni: NetworkId,
+    ) -> CtlResult<NextIter> {
+        let ring = HashRing::from_nodes(cc.ring.nodes.keys().cloned());
+
+        let old_vn = ring.cursor(&vn).get();
+        let old_ni = cc.ring.network_id(&old_vn).ok_or("no ni for target vn")?;
+
+        let updating = self
+            .router
+            .at(old_ni.as_location())
+            .updating()
+            .await
+            .map_err(|e| format!("failed to check if {old_ni:?} is updating: {e:?}"))?;
+
+        if updating {
+            return Ok(NextIter::Wait);
+        }
+
+        let cf = {
+            let mut cf = RingConfig {
+                nodes: cc.ring.nodes.clone(),
+                update: None,
+            };
+            cf.nodes.insert(vn, ni);
+            cf
+        };
+
+        let others = self
+            .known
+            .keys()
+            .filter(|x| *x != old_ni)
+            .cloned()
+            .collect::<HashSet<NetworkId>>();
+
+        for ni in others.iter() {
+            self.push_config(ni, cf.clone()).await?;
+        }
+
+        self.push_config(old_ni, cf).await?;
+        Ok(NextIter::Fast)
+    }
+
+    async fn run_once(&mut self) -> CtlResult<NextIter> {
         log::debug!("getting desired config");
         let desired = self.get_desired_config().await?;
 
@@ -301,21 +391,28 @@ impl Controller {
         self.update_actual_config(&desired).await?;
 
         match self.action(&desired)? {
-            Action::None => {
+            Action::Nothing => {
                 log::debug!("nothing to do");
-                Ok(())
+                Ok(NextIter::Wait)
             }
-            Action::Bootstrap => {
-                log::info!("cluster bootstrap");
-                self.do_bootstrap(&desired).await
+            Action::BootstrapAll => {
+                log::info!("cluster bootstrap all");
+                self.do_bootstrap_all(&desired).await?;
+                Ok(NextIter::Fast)
             }
-            Action::BeginAdd(vn, ni) => {
-                log::info!("adding {vn:?} -> {ni:?}");
-                Ok(())
+            Action::BootstrapOne(ni, ring) => {
+                log::info!("cluster bootstrap one: {ni:?}");
+                self.push_config(&ni, ring).await?;
+                Ok(NextIter::Fast)
             }
-            Action::TryFinishAdd(vn, ni0, ni1) => {
-                log::debug!("checking {vn:?} -> {ni0:?}, {ni1:?}");
-                Ok(())
+            Action::BeginAdd(cc, vn, ni) => {
+                log::info!("starting to-add {vn:?} -> {ni:?}");
+                self.do_begin_add(cc, vn, ni).await?;
+                Ok(NextIter::Fast)
+            }
+            Action::TryFinishAdd(cc, vn, ni) => {
+                log::debug!("checking to-add {vn:?} -> {ni:?}");
+                self.do_try_finish_add(cc, vn, ni).await
             }
         }
     }
@@ -324,10 +421,18 @@ impl Controller {
         Box::pin(async {
             let mut controller = Controller::new();
             loop {
-                if let Err(e) = controller.run_once().await {
-                    log::warn!("controller iter failed: {e:?}");
-                }
-                tokio::time::sleep(Duration::from_secs(5)).await;
+                let iter = match controller.run_once().await {
+                    Ok(x) => x,
+                    Err(e) => {
+                        log::warn!("controller iter failed: {e:?}");
+                        NextIter::Wait
+                    }
+                };
+                let delay = match iter {
+                    NextIter::Fast => Duration::from_millis(100),
+                    NextIter::Wait => Duration::from_secs(5),
+                };
+                tokio::time::sleep(delay).await;
             }
         })
     }

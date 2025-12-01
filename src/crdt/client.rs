@@ -14,12 +14,13 @@ pub struct CrdtClient<T: StoredCrdt> {
 impl<T: StoredCrdt> CrdtClient<T> {
     /// Create a new CRDT client bound to a particular scope. The type parameter
     /// `T` must have been previously bound to the same scope.
-    pub fn new(scope: String) -> CrdtClient<T> {
-        if !check_scope::<T>(&scope) {
+    pub fn new(scope: impl AsRef<str>) -> CrdtClient<T> {
+        let scope = scope.as_ref();
+        if !check_scope::<T>(scope) {
             panic!("wrong StoredCrdt impl for scope {scope}");
         }
         CrdtClient {
-            scope: scope,
+            scope: scope.to_owned(),
             router: CrdtRouterClient::new(),
             _marker: PhantomData,
         }

@@ -34,17 +34,21 @@ impl NetworkId {
 }
 
 /// A full configuration of a consistent hash ring.
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RingConfig {
     /// A map of virtual ring node IDs to network IDs. The ring is implied by
     /// the sha256 hashes of the virtual nodes.
     pub nodes: HashMap<VirtualNodeId, NetworkId>,
 
-    /// Virtual nodes which are currently being added
-    pub to_add: HashSet<VirtualNodeId>,
+    /// In-progress modification.
+    pub update: Option<RingUpdateConfig>,
+}
 
-    /// Virtual nodes which are currently being deleted
-    pub to_remove: HashSet<VirtualNodeId>,
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RingUpdateConfig {
+    ToAdd { vn: VirtualNodeId, ni: NetworkId },
+    ToRemove { vn: VirtualNodeId, ni: NetworkId },
 }
 
 impl RingConfig {
@@ -86,6 +90,14 @@ impl HashRing {
         HashRing { data }
     }
 
+    /// Create a new hash ring that includes the given virtual node.
+    pub fn with_node(&self, vn: VirtualNodeId) -> HashRing {
+        let mut data = self.data.clone();
+        data.push((format!("{}", Hex(vn.as_sha256())), vn));
+        data.sort();
+        HashRing { data }
+    }
+
     /// A cursor for navigating the hash ring, starting at a given point.
     pub fn cursor(&'_ self, start: &impl RingKey) -> HashRingCursor<'_> {
         HashRingCursor::new(self, start)
@@ -112,7 +124,7 @@ impl<'r> HashRingCursor<'r> {
     }
 
     /// Get the virtual node that represents the current key range.
-    pub fn get(&self) -> &VirtualNodeId {
+    pub fn get(&self) -> &'r VirtualNodeId {
         &self.ring.data[self.i].1
     }
 
