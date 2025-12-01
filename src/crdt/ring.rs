@@ -90,7 +90,7 @@ impl HashRing {
     }
 
     /// Get the range including the given point
-    pub fn range(&'_ self, containing: &impl RingKey) -> HashRingRange<'_> {
+    pub fn range(&'_ self, containing: &impl RingKey) -> HashRingRange {
         self.cursor(containing).range()
     }
 }
@@ -105,7 +105,7 @@ impl<'r> HashRingCursor<'r> {
     /// Create a new hash ring cursor pointing at the range in which the given
     /// key falls.
     pub fn new(ring: &'r HashRing, at: &impl RingKey) -> HashRingCursor<'r> {
-        let hash = format!("{}", Hex(at.as_sha256()));
+        let hash = at.as_sha256_string();
         let n = ring.data.len();
         let i = match ring.data.binary_search_by(|x| x.0.cmp(&hash)) {
             Ok(i) => i,
@@ -129,37 +129,55 @@ impl<'r> HashRingCursor<'r> {
     }
 
     /// Get a range object for the current cursor position
-    pub fn range(&self) -> HashRingRange<'r> {
-        let a = self.get();
-        let b = self.next().get();
-        HashRingRange { a, b }
+    pub fn range(&self) -> HashRingRange {
+        let a = self.get().clone();
+        let b = self.next().get().clone();
+        HashRingRange::new(a, b)
     }
 }
 
 /// A range in a hash ring, represented by a pair of virtual nodes.
-pub struct HashRingRange<'r> {
-    a: &'r VirtualNodeId,
-    b: &'r VirtualNodeId,
+pub struct HashRingRange {
+    a_hash: String,
+    b_hash: String,
+    a: VirtualNodeId,
+    b: VirtualNodeId,
 }
 
-impl<'r> HashRingRange<'r> {
+impl HashRingRange {
+    fn new(a: VirtualNodeId, b: VirtualNodeId) -> HashRingRange {
+        HashRingRange {
+            a_hash: a.as_sha256_string(),
+            b_hash: b.as_sha256_string(),
+            a,
+            b,
+        }
+    }
+
     /// Get the virtual node ID for the start of the range
-    pub fn start(&self) -> &'r VirtualNodeId {
-        self.a
+    pub fn start(&self) -> &VirtualNodeId {
+        &self.a
     }
 
     /// Tests whether the given point is contained in this range
     pub fn contains(&self, pt: &impl RingKey) -> bool {
         use std::cmp::Ordering::*;
-
-        let a_str = self.a.as_sha256_string();
-        let b_str = self.b.as_sha256_string();
-        let x_str = pt.as_sha256_string();
-
-        match a_str.cmp(&b_str) {
+        let x_hash = pt.as_sha256_string();
+        match self.a_hash.cmp(&self.b_hash) {
             Equal => false, // range is empty. this should never happen, though
-            Less => a_str <= x_str && x_str < b_str,
-            Greater => a_str <= x_str || x_str < b_str,
+            Less => self.a_hash <= x_hash && x_hash < self.b_hash,
+            Greater => self.a_hash <= x_hash || x_hash < self.b_hash,
+        }
+    }
+
+    /// Creates a new range with an updated starting node ID
+    pub fn trim_start(&self, vn: VirtualNodeId) -> HashRingRange {
+        assert!(self.contains(&vn));
+        HashRingRange {
+            a_hash: vn.as_sha256_string(),
+            b_hash: self.b_hash.clone(),
+            a: vn,
+            b: self.b.clone(),
         }
     }
 }

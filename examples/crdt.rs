@@ -12,7 +12,7 @@ const SCOPE: &'static str = "crdt-example";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct MyCrdt {
-    value: Version<u64, HashSet<String>>,
+    value: Version<u64, HashSet<u64>>,
 }
 
 impl Crdt for MyCrdt {
@@ -47,7 +47,7 @@ impl Driver {
             if let Err(e) = self.run_once().await {
                 log::error!("driver iter failed: {e:?}");
             }
-            tokio::time::sleep(Duration::from_secs(2)).await;
+            tokio::time::sleep(Duration::from_millis(200)).await;
         }
     }
 
@@ -61,11 +61,17 @@ impl Driver {
     }
 
     fn choose_key(&self) -> String {
-        format!("my-awesome-key")
+        let n = rand::random_range(0..=9);
+        format!("my-key-{n}")
     }
 
     fn choose_modify(&self, mut item: MyCrdt) -> MyCrdt {
-        item.value.0 += 1;
+        if rand::random_bool(0.2) {
+            item.value.0 += 1;
+            item.value.1.clear();
+        } else {
+            item.value.1.insert(rand::random_range(10..99));
+        }
         item
     }
 

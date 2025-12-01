@@ -7,6 +7,8 @@ use futures::join;
 use rand::seq::SliceRandom;
 use sha2::Digest;
 
+const TTL: usize = 8;
+
 use crate::crdt::{
     merge_in_scope,
     ring::{HashRing, NetworkId, RingConfig, RingKey, RingUpdateConfig},
@@ -18,8 +20,8 @@ mod ops {
 
     amimono::rpc_ops! {
         // router endpoints
-        fn get(ttl: u32, scope: String, key: String) -> Option<Vec<u8>>;
-        fn put(ttl: u32, scope: String, key: String, data: Vec<u8>) -> Vec<u8>;
+        fn get(path: Vec<String>, scope: String, key: String) -> Option<Vec<u8>>;
+        fn put(path: Vec<String>, scope: String, key: String, data: Vec<u8>) -> Vec<u8>;
 
         // storage layer endpoints
         fn get_here(scope: String, key: String) -> Option<Vec<u8>>;
@@ -62,7 +64,7 @@ impl CrdtRouter {
 
         let action = match &cf.update {
             Some(ToAdd { vn, ni }) => {
-                if range.contains(vn) {
+                if range.contains(vn) && range.trim_start(vn.clone()).contains(ck) {
                     // this key is being migrated and may already have been moved
                     Action::StoreAdding(ni.clone())
                 } else {
@@ -101,10 +103,6 @@ impl CrdtRouter {
             .next()
             .ok_or(RpcError::Misc(format!("no other peers")))
     }
-
-    async fn sync_updater(&self) {
-        // TODO
-    }
 }
 
 impl ops::Handler for CrdtRouter {
@@ -119,19 +117,28 @@ impl ops::Handler for CrdtRouter {
             }
         };
 
-        let router = CrdtRouter {
+        let storage = storage::instance();
+        storage.sync_updater().await;
+        CrdtRouter {
             myself,
-            storage: storage::instance(),
+            storage,
             router: CrdtRouterClient::new(),
-        };
-        router.sync_updater().await;
-        router
+        }
     }
 
-    async fn get(&self, ttl: u32, scope: String, key: String) -> RpcResult<Option<Vec<u8>>> {
-        if ttl == 0 {
-            return Err(RpcError::Misc(format!("ttl expired")));
+    async fn get(
+        &self,
+        path: Vec<String>,
+        scope: String,
+        key: String,
+    ) -> RpcResult<Option<Vec<u8>>> {
+        if path.len() >= TTL {
+            return Err(RpcError::Misc(format!("ttl expired: {path:?}")));
         }
+        let next_path = path
+            .into_iter()
+            .chain(Some(self.myself.0.clone()).into_iter())
+            .collect();
 
         let ck = CompositeKey { scope, key };
 
@@ -149,7 +156,7 @@ impl ops::Handler for CrdtRouter {
             Action::Forward(to) => {
                 self.router
                     .at(to.as_location())
-                    .get(ttl - 1, ck.scope, ck.key)
+                    .get(next_path, ck.scope, ck.key)
                     .await
             }
 
@@ -159,7 +166,7 @@ impl ops::Handler for CrdtRouter {
                 let tgt = self.router.at(to.as_location());
                 let (a, b) = join!(
                     self.get_here(ck.scope.clone(), ck.key.clone()),
-                    tgt.get(ttl - 1, ck.scope.clone(), ck.key.clone())
+                    tgt.get_here(ck.scope.clone(), ck.key.clone())
                 );
                 let res = match (a?, b?) {
                     (None, None) => None,
@@ -176,10 +183,20 @@ impl ops::Handler for CrdtRouter {
         }
     }
 
-    async fn put(&self, ttl: u32, scope: String, key: String, data: Vec<u8>) -> RpcResult<Vec<u8>> {
-        if ttl == 0 {
-            return Err(RpcError::Misc(format!("ttl expired")));
+    async fn put(
+        &self,
+        path: Vec<String>,
+        scope: String,
+        key: String,
+        data: Vec<u8>,
+    ) -> RpcResult<Vec<u8>> {
+        if path.len() >= TTL {
+            return Err(RpcError::Misc(format!("ttl expired: {path:?}")));
         }
+        let next_path = path
+            .into_iter()
+            .chain(Some(self.myself.0.clone()).into_iter())
+            .collect();
 
         let ck = CompositeKey { scope, key };
 
@@ -194,10 +211,17 @@ impl ops::Handler for CrdtRouter {
         };
 
         match action {
-            Action::Forward(to) | Action::StoreAdding(to) => {
+            Action::Forward(to) => {
                 self.router
                     .at(to.as_location())
-                    .put(ttl - 1, ck.scope, ck.key, data)
+                    .put(next_path, ck.scope, ck.key, data)
+                    .await
+            }
+
+            Action::StoreAdding(to) => {
+                self.router
+                    .at(to.as_location())
+                    .put_here(ck.scope, ck.key, data)
                     .await
             }
 
@@ -220,7 +244,7 @@ impl ops::Handler for CrdtRouter {
     }
 
     async fn updating(&self) -> RpcResult<bool> {
-        Ok(rand::random_bool(0.9))
+        Ok(self.storage.updating().await)
     }
 
     async fn get_ring(&self) -> RpcResult<Option<RingConfig>> {
@@ -229,7 +253,7 @@ impl ops::Handler for CrdtRouter {
 
     async fn set_ring(&self, ring: RingConfig) -> RpcResult<()> {
         self.storage.set_ring_config(ring).await;
-        self.sync_updater().await;
+        self.storage.sync_updater().await;
         Ok(())
     }
 }

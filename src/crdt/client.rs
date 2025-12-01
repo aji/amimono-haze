@@ -4,8 +4,6 @@ use amimono::rpc::{RpcError, RpcResult};
 
 use crate::crdt::{StoredCrdt, check_scope, router::CrdtRouterClient};
 
-const TTL: u32 = 8;
-
 /// A CRDT client bound to a particular scope.
 pub struct CrdtClient<T: StoredCrdt> {
     scope: String,
@@ -32,7 +30,7 @@ impl<T: StoredCrdt> CrdtClient<T> {
     pub async fn get(&self, key: &str) -> RpcResult<Option<T>> {
         let data = self
             .router
-            .get(TTL, self.scope.clone(), key.to_owned())
+            .get(vec![], self.scope.clone(), key.to_owned())
             .await?;
         let res = match data {
             Some(x) => {
@@ -51,7 +49,7 @@ impl<T: StoredCrdt> CrdtClient<T> {
             .map_err(|e| RpcError::Misc(format!("serialize failed: {e}")))?;
         let res = self
             .router
-            .put(TTL, self.scope.clone(), key.to_owned(), data)
+            .put(vec![], self.scope.clone(), key.to_owned(), data)
             .await?;
         let res_parsed = serde_json::from_slice(&res)
             .map_err(|e| RpcError::Misc(format!("parse failed: {e}")))?;

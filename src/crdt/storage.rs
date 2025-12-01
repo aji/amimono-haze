@@ -1,4 +1,4 @@
-use std::{io, path::PathBuf};
+use std::{io, path::PathBuf, time::Duration};
 
 use amimono::{
     config::{Binding, ComponentConfig},
@@ -6,16 +6,18 @@ use amimono::{
 };
 use futures::future::BoxFuture;
 use lockable::LockPool;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::crdt::{
     merge_in_scope,
-    ring::{HashRing, RingConfig},
+    ring::{HashRing, NetworkId, RingConfig, RingUpdateConfig, VirtualNodeId},
+    router::{CompositeKey, CrdtRouterClient},
 };
 
 pub struct StorageInstance {
     root: PathBuf,
     ring: RwLock<RingStorage>,
+    updater: Mutex<Option<RingUpdateConfig>>,
     files: LockPool<PathBuf>,
 }
 
@@ -25,9 +27,11 @@ impl StorageInstance {
             .await
             .expect("failed to get storage location");
         let ring = RingStorage::load(root.join("ring.json")).await;
+        std::fs::create_dir_all(root.join("storage")).unwrap();
         StorageInstance {
             root,
             ring: RwLock::new(ring),
+            updater: Mutex::new(None),
             files: LockPool::new(),
         }
     }
@@ -95,14 +99,90 @@ impl StorageInstance {
         .await
     }
 
-    pub async fn delete_here(&self, scope: &str, key: &str) -> io::Result<()> {
-        self.with_lock(scope, key, async |path| {
-            if path.exists() {
-                tokio::fs::remove_file(path).await?;
+    pub async fn updating(&self) -> bool {
+        self.updater.lock().await.is_some()
+    }
+
+    pub async fn sync_updater(&'static self) {
+        let ring = self.ring.read().await;
+        let mut updater = self.updater.lock().await;
+
+        let have_update = updater.as_ref();
+        let want_update = ring.config.as_ref().and_then(|x| x.0.update.as_ref());
+
+        match (have_update, want_update) {
+            (None, None) => {}
+            (None, Some(b)) => {
+                *updater = Some(b.clone());
+                tokio::spawn(self.run_update(b.clone()));
             }
-            Ok(())
-        })
-        .await
+            (Some(a), None) => panic!("update {a:?} canceled by ring config update!"),
+            (Some(a), Some(b)) => {
+                if a != b {
+                    panic!("update replaced with non-equivalent update! {a:?} {b:?}");
+                }
+            }
+        }
+    }
+
+    async fn run_update(&self, update: RingUpdateConfig) {
+        match update {
+            RingUpdateConfig::ToAdd { vn, ni } => self.run_to_add(vn, ni).await,
+            RingUpdateConfig::ToRemove { .. } => todo!(),
+        }
+
+        let mut updater = self.updater.lock().await;
+        *updater = None;
+    }
+
+    async fn run_to_add(&self, vn: VirtualNodeId, ni: NetworkId) {
+        let router = CrdtRouterClient::new().at(ni.as_location());
+
+        let range = {
+            let range = self.ring.read().await.config.as_ref().unwrap().1.range(&vn);
+            range.trim_start(vn)
+        };
+
+        loop {
+            let mut num_failures = 0;
+            let mut num_transferred = 0;
+            for scope in self.list_scopes() {
+                for key in self.list_keys_in_scope(&scope) {
+                    let path = self.root.join("storage").join(mk_path(&scope, &key));
+                    let ck = CompositeKey {
+                        scope: scope.clone(),
+                        key: key.clone(),
+                    };
+                    if range.contains(&ck) {
+                        let data = tokio::fs::read(&path).await.unwrap();
+                        let res = router.put_here(scope.clone(), key.clone(), data).await;
+                        if let Ok(_) = res {
+                            num_transferred += 1;
+                            tokio::fs::remove_file(&path).await.unwrap();
+                        } else {
+                            num_failures += 1;
+                        }
+                    }
+                }
+            }
+            if num_failures == 0 && num_transferred == 0 {
+                break;
+            } else {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+    }
+
+    fn list_scopes(&self) -> impl Iterator<Item = String> {
+        std::fs::read_dir(self.root.join("storage"))
+            .unwrap()
+            .map(|x| x.unwrap().file_name().to_str().unwrap().to_owned())
+    }
+
+    fn list_keys_in_scope(&self, scope: &str) -> impl Iterator<Item = String> {
+        std::fs::read_dir(self.root.join("storage").join(scope))
+            .unwrap()
+            .map(|x| x.unwrap().file_name().to_str().unwrap().to_owned())
     }
 }
 
