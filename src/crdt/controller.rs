@@ -384,8 +384,8 @@ impl Controller {
         for ni in others.iter() {
             self.push_config(ni, cf.clone()).await?;
         }
-
         self.push_config(old_ni, cf).await?;
+
         Ok(NextIter::Fast)
     }
 

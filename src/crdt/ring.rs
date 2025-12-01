@@ -9,6 +9,10 @@ use crate::util::hex::Hex;
 /// Types that can be used as keys in the hash ring
 pub trait RingKey {
     fn as_sha256(&self) -> [u8; 32];
+
+    fn as_sha256_string(&self) -> String {
+        format!("{}", Hex(self.as_sha256()))
+    }
 }
 
 /// A virtual node ID. Each physical node will have multiple of these in the
@@ -56,15 +60,6 @@ impl RingConfig {
     pub fn network_id(&self, vn: &VirtualNodeId) -> Option<&NetworkId> {
         self.nodes.get(vn)
     }
-
-    /// Get the weight of each network ID in the ring
-    pub fn weights(&self) -> HashMap<NetworkId, usize> {
-        let mut res = HashMap::new();
-        for (_, ni) in self.nodes.iter() {
-            *res.entry(ni.clone()).or_insert(0) += 1;
-        }
-        res
-    }
 }
 
 /// A queryable hash ring data structure.
@@ -83,17 +78,8 @@ impl HashRing {
 
     /// Create a new hash ring from a list of virtual nodes.
     pub fn from_nodes(nodes: impl Iterator<Item = VirtualNodeId>) -> HashRing {
-        let mut data: Vec<(String, VirtualNodeId)> = nodes
-            .map(|n| (format!("{}", Hex(n.as_sha256())), n))
-            .collect();
-        data.sort();
-        HashRing { data }
-    }
-
-    /// Create a new hash ring that includes the given virtual node.
-    pub fn with_node(&self, vn: VirtualNodeId) -> HashRing {
-        let mut data = self.data.clone();
-        data.push((format!("{}", Hex(vn.as_sha256())), vn));
+        let mut data: Vec<(String, VirtualNodeId)> =
+            nodes.map(|n| (n.as_sha256_string(), n)).collect();
         data.sort();
         HashRing { data }
     }
@@ -102,9 +88,14 @@ impl HashRing {
     pub fn cursor(&'_ self, start: &impl RingKey) -> HashRingCursor<'_> {
         HashRingCursor::new(self, start)
     }
+
+    /// Get the range including the given point
+    pub fn range(&'_ self, containing: &impl RingKey) -> HashRingRange<'_> {
+        self.cursor(containing).range()
+    }
 }
 
-/// A cursor around a hash ring.
+/// A cursor for navigating the hash ring
 pub struct HashRingCursor<'r> {
     ring: &'r HashRing,
     i: usize,
@@ -128,10 +119,47 @@ impl<'r> HashRingCursor<'r> {
         &self.ring.data[self.i].1
     }
 
-    /// Get a new cursor pointing at the previous range.
-    pub fn prev(&self) -> HashRingCursor<'r> {
+    /// Get a cursor representing the next range.
+    pub fn next(&self) -> HashRingCursor<'r> {
         let n = self.ring.data.len();
-        let i = (self.i + n - 1) % n;
-        HashRingCursor { ring: self.ring, i }
+        HashRingCursor {
+            ring: self.ring,
+            i: (self.i + 1) % n,
+        }
+    }
+
+    /// Get a range object for the current cursor position
+    pub fn range(&self) -> HashRingRange<'r> {
+        let a = self.get();
+        let b = self.next().get();
+        HashRingRange { a, b }
+    }
+}
+
+/// A range in a hash ring, represented by a pair of virtual nodes.
+pub struct HashRingRange<'r> {
+    a: &'r VirtualNodeId,
+    b: &'r VirtualNodeId,
+}
+
+impl<'r> HashRingRange<'r> {
+    /// Get the virtual node ID for the start of the range
+    pub fn start(&self) -> &'r VirtualNodeId {
+        self.a
+    }
+
+    /// Tests whether the given point is contained in this range
+    pub fn contains(&self, pt: &impl RingKey) -> bool {
+        use std::cmp::Ordering::*;
+
+        let a_str = self.a.as_sha256_string();
+        let b_str = self.b.as_sha256_string();
+        let x_str = pt.as_sha256_string();
+
+        match a_str.cmp(&b_str) {
+            Equal => false, // range is empty. this should never happen, though
+            Less => a_str <= x_str && x_str < b_str,
+            Greater => a_str <= x_str || x_str < b_str,
+        }
     }
 }
