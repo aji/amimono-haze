@@ -1,15 +1,9 @@
 use amimono::config::{AppBuilder, JobBuilder};
 
-#[cfg(feature = "blob")]
-pub mod blob;
 #[cfg(feature = "crdt")]
 pub mod crdt;
 #[cfg(feature = "dashboard")]
 pub mod dashboard;
-#[cfg(feature = "dht")]
-pub mod dht;
-#[cfg(feature = "metadata")]
-pub mod metadata;
 
 pub(crate) mod util;
 
@@ -30,15 +24,9 @@ pub fn installer_with_prefix(prefix: &str) -> impl FnOnce(&mut AppBuilder) {
             controller.build()
         });
 
-        #[cfg(feature = "blob")]
-        blob::install(app, prefix);
         #[cfg(feature = "crdt")]
         crdt::install(app, prefix);
         #[cfg(feature = "dashboard")]
         dashboard::install(app, prefix);
-        #[cfg(feature = "dht")]
-        dht::install(app, prefix);
-        #[cfg(feature = "metadata")]
-        metadata::install(app, prefix);
     }
 }

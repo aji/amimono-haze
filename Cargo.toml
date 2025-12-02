@@ -5,14 +5,11 @@ edition = "2024"
 
 [features]
 default = ["storage", "dashboard"]
-storage = ["crdt", "metadata", "dht", "blob"]
-dashboard = ["dep:axum"]
+storage = ["crdt"]
 
-blob = []
 crdt = ["controller"]
 controller = []
-dht = ["metadata"]
-metadata = []
+dashboard = ["dep:axum"]
 
 [dependencies]
 amimono = { git = "https://github.com/aji/amimono.git" }

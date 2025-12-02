@@ -17,10 +17,6 @@ pub mod tree;
 
 #[cfg(feature = "crdt")]
 mod crdt;
-#[cfg(feature = "dht")]
-mod dht;
-#[cfg(feature = "metadata")]
-mod metadata;
 
 const PORT: u16 = 8585;
 
@@ -33,12 +29,6 @@ impl Directory for DashboardSysDirectory {
         if cfg!(feature = "crdt") {
             entries.push(DirEntry::dir("crdt"));
         }
-        if cfg!(feature = "dht") {
-            entries.push(DirEntry::dir("dht"));
-        }
-        if cfg!(feature = "metadata") {
-            entries.push(DirEntry::dir("metadata"));
-        }
 
         Ok(entries)
     }
@@ -47,10 +37,6 @@ impl Directory for DashboardSysDirectory {
         match name {
             #[cfg(feature = "crdt")]
             "crdt" => Ok(crdt::CrdtDirectory.boxed()),
-            #[cfg(feature = "dht")]
-            "dht" => Ok(dht::DhtDirectory.boxed()),
-            #[cfg(feature = "metadata")]
-            "metadata" => Ok(metadata::MetadataDirectory.boxed()),
             _ => Err(TreeError::NotFound),
         }
     }
